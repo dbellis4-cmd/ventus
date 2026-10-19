@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output and generated files
+/.next/
+/out/
+/build/
+/dist/
+/coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local logs and editor/OS files
+*.log
+.DS_Store
+
+# Environment variables (examples must contain placeholders only)
+.env*
+!.env.example
+
+# Secrets and local credentials
+secrets/
+.secrets/
+.aws/
+credentials.json
+credentials.*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+
+# Deployment metadata
+.vercel/
