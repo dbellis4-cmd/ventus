@@ -18,9 +18,10 @@ Current:
 - ESLint
 - npm
 - Supabase email/password Authentication with official clients (`@supabase/supabase-js` and `@supabase/ssr`) and SSR sessions; registration, login, logout, and protected Dashboard access manually verified by the project owner; password recovery pending manual verification due to Supabase rate limiting
+- Supabase PostgreSQL five-table foundation and restricted RPCs applied to hosted development; 132 local database assertions and hosted structural checks passed; application task persistence remains unfinished
 
 Planned, subject to approval:
-- Supabase PostgreSQL application tables and RLS; production Auth configuration and release verification
+- Persistent Dashboard integration; production Auth configuration and release verification
 - Google Calendar API
 - shadcn/ui
 - Playwright
@@ -169,6 +170,16 @@ For completed tasks, report:
 Avoid unnecessary commentary and lengthy explanations.
 
 When implementation involves significant architectural, security, or cost implications, explain the tradeoffs before proceeding.
+
+## 11. Project Context and Handoffs
+
+- Read `PROJECT_STATUS.md` at the beginning of each development session.
+- Read `HANDOFF.md` when continuing work from a previous conversation.
+- Consult other project documents selectively for the task at hand.
+- Update `PROJECT_STATUS.md` after significant milestones.
+- Update `HANDOFF.md` before switching conversations or after substantial unfinished work.
+- Keep handoffs concise and factual; distinguish implementation, automated checks, and manual verification.
+- Check actual code, migration files, and Git state. Handoff summaries do not replace those checks or grant authorization for external changes.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

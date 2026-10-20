@@ -1,0 +1,5 @@
+# Local CLI state and generated branch/cache files, never source migrations.
+.temp/
+.branches/
+__pycache__/
+*.pyc
