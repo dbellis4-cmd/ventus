@@ -1,6 +1,6 @@
 # Ventus — Technical Architecture
 
-**Status:** Authentication and five-table database foundation implemented; persistent Dashboard integration and later architecture remain unfinished/proposed.
+**Status:** Milestone 3 persistent reads, creation/editing, lifecycle and approved cleanup are complete. Milestone 4 recurrence and later architecture remain pending.
 
 **Reviewed:** October 19, 2026.
 
@@ -8,7 +8,7 @@
 
 `PRD.md` governs behavior; `AGENTS.md` governs development; `SECURITY.md` governs release. Recommendations here do not approve unresolved behavior or external services.
 
-The working Next.js foundation has npm checks and GitHub history. Milestone 1 task workflows use in-memory fixtures. Milestone 2 includes email/password auth pages/actions, SSR callbacks, logout, and server-protected Dashboard access. At finalization on October 19, 2026, the project owner reported registration, login, logout, and protected Dashboard access passed manual verification. Password recovery is pending manual verification due to Supabase rate limiting; it is not passed. All 16 automated authentication tests, lint, typecheck, and build pass. Persistence and remaining release checks are pending. Product Phase 2 remains deferred. The approved five-table database foundation is applied to hosted development; 132 local assertions and hosted structural verification passed. Hosted user-level behavior and application persistence remain untested/unimplemented respectively. See `PROJECT_STATUS.md` and `supabase/tests/HOSTED_RESULTS.md`.
+The working Next.js foundation has npm checks and GitHub history. Milestone 1 task workflows used in-memory fixtures. Milestone 2 includes email/password auth pages/actions, SSR callbacks, logout, and server-protected Dashboard access. Password recovery is pending manual verification due to Supabase rate limiting. The approved five-table database foundation is applied to hosted development; 132 prior local assertions and hosted structural verification passed. The owner reports hosted Stage 2A/2B, two-account isolation and the final canceled-subtask/category regression passed. Release checks remain pending. Product Phase 2 remains deferred. See `PROJECT_STATUS.md` and `supabase/tests/HOSTED_RESULTS.md`.
 
 ## 2. Technology assessment
 
@@ -17,10 +17,10 @@ The working Next.js foundation has npm checks and GitHub history. Milestone 1 ta
 | Next.js 16.4.2, React 19.3.1, TypeScript | Existing | Shared frontend/backend deployment. Follow installed guides, including `proxy.ts` conventions. |
 | Tailwind CSS 4 | Existing | Consistent responsive styling without another styling system. |
 | shadcn/ui | Proposed | Accessible modal/menu primitives when needed; copied code requires maintenance. Native controls suffice initially. |
-| Supabase PostgreSQL and Auth | Auth and database foundation implemented | Official clients and approved project-local Supabase CLI installed. Both five-table migrations applied to hosted development. Persistent application integration, backups/recovery and release verification remain pending. |
+| Supabase PostgreSQL and Auth | Milestone 3 integration complete | Official clients and approved project-local Supabase CLI installed. Both five-table migrations applied to hosted development. Backups/recovery and release verification remain pending. |
 | rrule.js (`rrule`) | Proposed; requires approval | Recurrence adapter avoids custom algorithms; validate timezone semantics and maintenance/security. [Guidance](https://github.com/jkbrzt/rrule). |
 | Google Calendar API | Product integration approved; technical setup pending | Synchronize linked events. OAuth consent verification, quotas, and refresh failures introduce operational work. |
-| Existing checks; Node test runner; Playwright | Checks existing; testing proposed | Built-in runner for pure rules after TypeScript compatibility validation; Playwright for workflows. Consider another unit runner only for simpler configuration. |
+| Existing checks; Node test runner; Playwright | In use | Node tests cover domain/action rules; Playwright tests real UI interactions against disposable mock Supabase data. |
 | Vercel | Proposed preferred host | Native Next.js previews and deployment. Paid scheduling may be necessary; eligibility and budget remain open. |
 | GitHub | Existing | Source/history at `dbellis4-cmd/ventus`; commits, pushes, and deployment integration require explicit instruction. |
 
@@ -30,7 +30,7 @@ Postgres can hold durable synchronization jobs; no separate broker or ORM is nee
 
 Server Components load authorized data; Client Components handle interaction. Server Actions mutate tasks; Route Handlers serve callbacks and workers. Both call shared domain services and server-only data-access functions.
 
-The diagram includes planned persistence/Calendar paths; the current Dashboard still uses fixtures.
+The Dashboard uses verified, user-scoped persistent reads and Stage 2A/2B task actions through the existing atomic RPCs. The diagram also includes later Calendar paths; recurrence and Calendar controls remain disabled.
 
 ```mermaid
 flowchart LR
@@ -162,7 +162,7 @@ Record redacted failures, retry backlog, stale connections, and alerts. Select b
 |---|---|---|
 | 1. Interactive dashboard | Existing React/Tailwind; local fixtures, Sunday–Saturday navigation, sections, completion toggles, shared create/edit modal. Explicitly temporary in-memory state. | Date/week navigation, sorting, modal editing, keyboard/touch behavior, responsive layout, existing checks. |
 | 2. Authentication foundation | Registration/login/logout, protected Dashboard, SSR clients/callbacks, and recovery implementation finalized. Settings remain a placeholder; database/RLS harness awaits persistence. | Owner-reported manual registration/login/logout/protected Dashboard passes; 16 automated tests and npm checks pass. Password recovery pending manual verification due to Supabase rate limiting. Remaining session/abuse checks still gate release. |
-| 3. Persistent task lifecycle | Database foundation applied; Dashboard storage integration remains unfinished. Preserve existing UI and atomic nonrecurring contracts. | 132 local DB assertions and hosted structural checks passed; hosted user-level and application persistence tests pending. |
+| 3. Persistent task lifecycle | Complete: database foundation, Stage 1/2A/2B application integration and approved cleanup. | Prior 132 local DB assertions and hosted structural checks; final 17 auth, 41 task and 3 browser tests passed. Owner reports hosted lifecycle, isolation and canceled-subtask/category regression passed. |
 | 4. Recurrence and missed tasks | Approved rrule/time/rollover/series rules. | DST/month boundaries, bounded catch-up, duplicate retries, historical preservation. |
 | 5. Calendar outbound | Approved OAuth/scopes/mapping; encrypted connections, links, durable jobs. | Retry without duplicate events, refresh/revocation, unrelated-event safety. |
 | 6. Calendar inbound | Approved conflicts/deletions/recurrence mapping/freshness. | Two-way changes, echo suppression, 410 recovery, conflicts, disconnect and failures. |
@@ -196,6 +196,6 @@ Record redacted failures, retry backlog, stale connections, and alerts. Select b
 
 ## 13. Next integration boundary
 
-Complete Milestone 3 by replacing Dashboard fixtures with authenticated persistent reads and atomic RPC writes. Follow `supabase/OPERATIONS.md` for exact input/expected-version contracts and `PROJECT_STATUS.md` for acceptance criteria. Verify anonymous/two-user isolation through the application, reload persistence, safe error/conflict handling and original-deadline/history preservation. Hosted tests require their own applicable authorization; local evidence is not a hosted behavioral pass.
+Stage 1 replaced fixtures with authenticated persistent reads and confirmed workspace initialization. Stage 2A connected the existing modal to `create_task` / `edit_task_tree`, with complete hierarchy loading, expected versions, stable creation keys and draft/conflict handling. Stage 2B connected completion/reopening, postponement, cancellation and soft deletion to the existing restricted RPCs. Local mock-provider tests passed; the owner reports hosted Stage 2A/2B, account isolation and final category regression passed. Follow `supabase/OPERATIONS.md` for exact input/expected-version contracts and `PROJECT_STATUS.md` for current evidence. Codex's local evidence is not a hosted behavioral pass.
 
-Do not implement recurrence, Calendar, rewards or account-deletion UI as part of this integration. Selected-zone initialization UX, overdue cutoffs and other consequential product ambiguities must be resolved before exposing affected behavior. Keep password recovery **pending manual verification due to Supabase rate limiting**; neither the database milestone nor mocked tests close that item.
+Do not implement recurrence, Calendar, rewards or account-deletion UI as part of this integration. The owner approved explicit timezone confirmation, category behavior defaults, operational bounds and nonrecurring overdue/rollover rules for Stage 1; see `PROJECT_STATUS.md`. Keep password recovery **pending manual verification due to Supabase rate limiting**; neither the database milestone nor mocked tests close that item.

@@ -1,91 +1,121 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
-import { addDays, categoryFor, dateKey, formatDate, formatTime, sampleTasks, startOfWeek, type Task } from "@/lib/tasks/demo";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { addDays, formatDate, formatTime, startOfWeek, validDate } from "@/lib/tasks/dates";
+import type { ReadTask, Workspace } from "@/lib/tasks/projections";
 import { Icon } from "./icon";
-import { TaskModal, type TaskDraft } from "./task-modal";
+import { TimezoneSetup } from "./timezone-setup";
+import { TaskModal } from "./task-modal";
+import { changeTaskLifecycle, getTaskEditor } from "@/app/task-actions";
+import type { TaskEditor } from "@/lib/tasks/editor";
+import { LifecycleDialog, type LifecycleMode } from "./lifecycle-dialog";
 import { LogoutButton } from "@/components/auth/logout-button";
 
-const subscribe = () => () => {};
-
-function withoutBranch(tasks: Task[], id: string): Task[] {
-  const removed = new Set([id]);
-  let previousSize = 0;
-  while (previousSize !== removed.size) {
-    previousSize = removed.size;
-    for (const task of tasks) if (task.parentId && removed.has(task.parentId)) removed.add(task.id);
-  }
-  return tasks.filter((task) => !removed.has(task.id));
-}
-
-export function Dashboard() {
-  // Initialize dates in the browser's timezone, without a server hydration mismatch.
-  const ready = useSyncExternalStore(subscribe, () => true, () => false);
-  return ready ? <Planner /> : <main className="loading-shell" aria-busy="true">Loading your workspace…</main>;
-}
-
-function Planner() {
-  const [today] = useState(() => dateKey(new Date()));
-  const [selected, setSelected] = useState(today);
-  const [tasks, setTasks] = useState<Task[]>(() => sampleTasks(today));
+export function Dashboard({ workspace }: { workspace: Workspace }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const [view, setView] = useState("Dashboard");
-  const [modal, setModal] = useState<{ task?: Task; postpone: boolean } | null>(null);
+  const [editor, setEditor] = useState<TaskEditor | null>(null);
+  const [lifecycle, setLifecycle] = useState<{ mode: LifecycleMode; editor: TaskEditor } | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [busyTask, setBusyTask] = useState<string | null>(null);
+  const taskInFlight = useRef<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [noticeError, setNoticeError] = useState(false);
+  const editorRequest = useRef(0);
+  const ready = workspace.kind === "ready" ? workspace : null;
+  const today = ready?.today ?? "2000-01-01";
+  const selected = ready?.selected ?? today;
+  const tasks = ready?.tasks ?? [];
   const week = startOfWeek(selected);
   const days = Array.from({ length: 7 }, (_, index) => addDays(week, index));
-  const dayTasks = tasks.filter((task) => task.date === selected);
-  const overdue = selected === today ? tasks.filter((task) => task.date < today && categoryFor(task.category).deadline && (task.status === "open" || (task.status === "completed" && task.completedOn === today))) : [];
-  const scheduled = dayTasks.filter((task) => task.time).sort((a, b) => a.time.localeCompare(b.time));
+  const overdue = selected === today ? tasks.filter((task) => task.overdue) : [];
+  const dayTasks = tasks.filter((task) => task.date === selected && !(selected === today && task.overdue));
+  const scheduled = dayTasks.filter((task) => task.time).sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
   const anytime = dayTasks.filter((task) => !task.time);
 
-  function save(draft: TaskDraft) {
-    const { subtasks, ...task } = draft;
-    setTasks((current) => {
-      const keep = new Set(subtasks.map((sub) => sub.id));
-      let next = current;
-      for (const sub of current.filter((item) => item.parentId === task.id && !keep.has(item.id))) next = withoutBranch(next, sub.id);
-      next = next.filter((item) => item.id !== task.id);
-      next.push(task);
-      for (const sub of subtasks) {
-        const existing = next.find((item) => item.id === sub.id);
-        next = next.filter((item) => item.id !== sub.id);
-        next.push({ ...task, time: "", endTime: "", location: "", recurrence: "", recurrenceEnd: "", calendar: false, status: "open", completedOn: undefined, ...existing, ...sub, parentId: task.id });
+  function selectDay(date: string) {
+    if (!validDate(date) || date < "0002-01-01" || date > "9998-12-31") return;
+    editorRequest.current += 1;
+    setEditorLoading(false);
+    startTransition(() => router.push(`/?date=${date}`, { scroll: false }));
+  }
+
+  // Refresh deadlines and Today across midnight and when returning to this tab.
+  // Every refresh goes through the server's verified session and owned reads.
+  useEffect(() => {
+    function refresh() { if (document.visibilityState === "visible") router.refresh(); }
+    const interval = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [router]);
+
+  async function openEditor(taskId: string | null = null) {
+    const request = ++editorRequest.current;
+    setEditorLoading(true); setNotice(""); setNoticeError(false);
+    try {
+      const result = await getTaskEditor(taskId);
+      if (request !== editorRequest.current) return;
+      if (result.ok) {
+        const task = result.editor.nodes.find((node) => node.id === taskId);
+        if (task && task.status !== "open") {
+          setNotice(task.status === "completed" ? "Reopen this task with its checkbox before editing." : "Canceled tasks cannot be edited."); setNoticeError(true);
+        } else setEditor(result.editor);
+      } else { setNotice(result.message); setNoticeError(true); }
+    } catch { if (request === editorRequest.current) { setNotice("Unable to load the task editor. Please try again."); setNoticeError(true); } }
+    finally { if (request === editorRequest.current) setEditorLoading(false); }
+  }
+
+  function saved(date: string, refreshFailed: boolean) {
+    setEditor(null); setLifecycle(null); setNotice(refreshFailed ? "Task saved. Refresh the Dashboard to see the latest data." : "Task saved."); setNoticeError(false);
+    startTransition(() => { router.push(`/?date=${date}`, { scroll: false }); router.refresh(); });
+  }
+
+  async function toggleCompletion(task: ReadTask) {
+    if (taskInFlight.current) return;
+    taskInFlight.current = task.id; setBusyTask(task.id); setNotice("");
+    try {
+      const loaded = await getTaskEditor(task.id);
+      if (!loaded.ok) { setNotice(loaded.message); setNoticeError(true); return; }
+      const node = loaded.editor.nodes.find((item) => item.id === task.id);
+      if (!node || node.status !== task.status || node.date !== task.scheduledDate) { setNotice("This task changed elsewhere. Refresh and try again."); setNoticeError(true); router.refresh(); return; }
+      const result = await changeTaskLifecycle({ kind: "completion", taskId: task.id, rootVersion: loaded.editor.rootVersion,
+        taskVersion: node.taskVersion, occurrenceVersion: node.occurrenceVersion, completed: task.status !== "completed" });
+      if (result.ok) saved(result.date, !!result.refreshFailed);
+      else { setNotice(result.message); setNoticeError(true); if (result.code !== "invalid") router.refresh(); }
+    } catch { setNotice("The completion outcome is unknown. Refresh the Dashboard before trying again."); setNoticeError(true); router.refresh(); }
+    finally { taskInFlight.current = null; setBusyTask(null); }
+  }
+
+  async function openLifecycle(task: ReadTask, mode: LifecycleMode) {
+    if (taskInFlight.current) return;
+    taskInFlight.current = task.id; setBusyTask(task.id); setNotice("");
+    try {
+      const result = await getTaskEditor(task.id);
+      if (!result.ok) { setNotice(result.message); setNoticeError(true); return; }
+      const node = result.editor.nodes.find((item) => item.id === task.id);
+      if (!node || node.status !== task.status || node.date !== task.scheduledDate || (mode !== "delete" && node.status !== "open")) {
+        setNotice("This task changed elsewhere. Refresh and try again."); setNoticeError(true); router.refresh(); return;
       }
-      return next;
-    });
-    setSelected(task.date);
-    setNotice(modal?.postpone ? `Postponed “${task.title}”.` : `Saved “${task.title}”.`);
-    setModal(null);
+      setLifecycle({ mode, editor: result.editor });
+    } catch { setNotice("Unable to load this task. Please try again."); setNoticeError(true); }
+    finally { taskInFlight.current = null; setBusyTask(null); }
   }
 
-  function remove(id: string) {
-    const title = tasks.find((task) => task.id === id)?.title;
-    setTasks((current) => withoutBranch(current, id));
-    setModal(null);
-    setNotice(`Deleted “${title}” and any subtasks.`);
-  }
-
-  function toggle(task: Task) {
-    setTasks((current) => current.map((item) => item.id === task.id ? { ...item, status: item.status === "completed" ? "open" : "completed", completedOn: item.status === "completed" ? undefined : today } : item));
-    setNotice(`${task.status === "completed" ? "Reopened" : "Completed"} “${task.title}”.`);
-  }
-
-  function cancel(task: Task) {
-    setTasks((current) => current.map((item) => item.id === task.id ? { ...item, status: "canceled", completedOn: undefined } : item));
-    setNotice(`Canceled “${task.title}”.`);
-  }
-
-  function taskRow(task: Task, isOverdue = false) {
-    const parent = tasks.find((item) => item.id === task.parentId);
-    return <TaskRow key={task.id} task={task} parent={parent?.title} overdue={isOverdue}
-      onToggle={() => toggle(task)} onEdit={() => setModal({ task, postpone: false })}
-      onPostpone={() => setModal({ task, postpone: true })} onCancel={() => cancel(task)} onDelete={() => remove(task.id)} />;
+  function taskRow(task: ReadTask, isOverdue = false) {
+    return <TaskRow key={task.occurrenceId} task={task} overdue={isOverdue} accountTimezone={ready!.timezone} loading={editorLoading || !!busyTask} onEdit={() => void openEditor(task.id)} onComplete={() => void toggleCompletion(task)} onLifecycle={(mode) => void openLifecycle(task, mode)} />;
   }
 
   return <div className="workspace">
     <a href="#main-content" className="skip-link">Skip to content</a>
     <aside className="sidebar">
-      <button className="brand" onClick={() => { setView("Dashboard"); setSelected(today); }} aria-label="Ventus home"><span className="brand-mark" aria-hidden="true">v</span>Ventus<span className="brand-period">.</span></button>
+      <button className="brand" onClick={() => { setView("Dashboard"); if (ready) selectDay(today); else router.refresh(); }} aria-label="Ventus home"><span className="brand-mark" aria-hidden="true">v</span>Ventus<span className="brand-period">.</span></button>
       <p className="nav-label">WORKSPACE</p>
       <nav aria-label="Main navigation">
         <button className={`nav-item ${view === "Dashboard" ? "active" : ""}`} aria-current={view === "Dashboard" ? "page" : undefined} onClick={() => setView("Dashboard")}><Icon name="dashboard" />Dashboard</button>
@@ -98,50 +128,48 @@ function Planner() {
 
     <main id="main-content" className="main-content">
       <header className="page-header"><h1>{view}</h1></header>
-      {view === "Dashboard" ? <>
-        <section className="week-planner" aria-label="Weekly planner">
+      {view === "Dashboard" ? workspace.kind === "setup" ? <TimezoneSetup /> : workspace.kind === "error" ? <section className="placeholder-panel" role="alert"><h2>Unable to load your workspace</h2><p>Your tasks could not be retrieved. Please try again.</p><button className="button secondary" onClick={() => router.refresh()}>Retry</button></section> : <>
+        <section className="week-planner" aria-label="Weekly planner" aria-busy={pending}>
           <div className="week-toolbar"><div><h2>{formatDate(selected, { month: "long", year: "numeric" })}</h2><p>{formatDate(week, { month: "short", day: "numeric" })} – {formatDate(addDays(week, 6), { month: "short", day: "numeric", year: "numeric" })}</p></div>
-            <div className="week-controls"><button className="button today-button" onClick={() => setSelected(today)}>Today</button><div className="arrow-group"><button className="icon-button" aria-label="Previous week" onClick={() => setSelected(addDays(selected, -7))}><Icon name="left" size={17} /></button><button className="icon-button" aria-label="Next week" onClick={() => setSelected(addDays(selected, 7))}><Icon name="right" size={17} /></button></div></div>
+            <div className="week-controls"><button className="button today-button" disabled={pending} onClick={() => selectDay(today)}>Today</button><div className="arrow-group"><button className="icon-button" aria-label="Previous week" disabled={pending || addDays(selected, -7) < "0002-01-01"} onClick={() => selectDay(addDays(selected, -7))}><Icon name="left" size={17} /></button><button className="icon-button" aria-label="Next week" disabled={pending || addDays(selected, 7) > "9998-12-31"} onClick={() => selectDay(addDays(selected, 7))}><Icon name="right" size={17} /></button></div></div>
           </div>
           <div className="week-scroll"><div className="day-grid">{days.map((date) => {
-            const items = tasks.filter((task) => task.date === date);
-            const names = [...new Set(items.map((item) => categoryFor(item.category).name))];
-            return <button key={date} className={`day-card ${selected === date ? "selected" : ""}`} aria-pressed={selected === date} aria-label={`${formatDate(date, { weekday: "long", month: "long", day: "numeric" })}, ${items.length} ${items.length === 1 ? "task" : "tasks"}${date === today ? ", today" : ""}`} onClick={() => setSelected(date)}>
+            const items = tasks.filter((task) => task.date === date || (date === today && task.overdue));
+            const names = [...new Set(items.map((item) => item.categoryName))];
+            return <button key={date} className={`day-card ${selected === date ? "selected" : ""}`} disabled={pending} aria-pressed={selected === date} aria-label={`${formatDate(date, { weekday: "long", month: "long", day: "numeric" })}, ${items.length} ${items.length === 1 ? "task" : "tasks"}${date === today ? ", today" : ""}`} onClick={() => selectDay(date)}>
               <span className="day-name">{formatDate(date, { weekday: "short" })}{date === today && <span className="today-dot" aria-label="Today" />}</span><span className="day-number">{formatDate(date, { day: "numeric" })}</span><span className="day-count">{items.length} {items.length === 1 ? "task" : "tasks"}</span><span className="day-categories" title={names.join(", ")}>{names.length ? `${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ""}` : "No tasks planned"}</span>
             </button>;
           })}</div></div>
         </section>
 
-        <section className="daily-panel" aria-labelledby="daily-heading">
-          <div className="daily-header"><div><div className="daily-title"><h2 id="daily-heading">{formatDate(selected, { weekday: "long", month: "long", day: "numeric" })}</h2>{selected === today && <span className="small-tag">Today</span>}</div></div><button className="button primary" onClick={() => setModal({ postpone: false })}><Icon name="plus" size={17} />Add task</button></div>
+        <section className="daily-panel" aria-labelledby="daily-heading" aria-busy={pending}>
+          <p className="stage-notice" role={noticeError ? "alert" : "status"}>{editorLoading ? "Loading task editor…" : busyTask ? "Updating task…" : pending ? "Loading selected day…" : notice}</p>
+          <div className="daily-header"><div><div className="daily-title"><h2 id="daily-heading">{formatDate(selected, { weekday: "long", month: "long", day: "numeric" })}</h2>{selected === today && <span className="small-tag">Today</span>}</div></div><button className="button primary" disabled={pending || editorLoading} onClick={() => void openEditor()}><Icon name="plus" size={17} />Add task</button></div>
           {overdue.length > 0 && <details className="overdue-panel"><summary><span className="overdue-title"><Icon name="warning" size={17} />Overdue<span className="overdue-count">{overdue.length}</span></span><span className="overdue-expand">View tasks<Icon name="down" size={16} /></span></summary><ul className="overdue-list">{overdue.map((task) => taskRow(task, true))}</ul></details>}
           <section className="task-section" aria-labelledby="scheduled-heading"><div className="section-heading"><h3 id="scheduled-heading">Scheduled Tasks</h3></div>{scheduled.length ? <ul className="task-list">{scheduled.map((task) => taskRow(task))}</ul> : <p className="empty-section">No scheduled tasks for this day.</p>}</section>
-          <section className="task-section anytime-section" aria-labelledby="anytime-heading"><div className="section-heading"><h3 id="anytime-heading">Anytime Tasks</h3></div>{anytime.length ? <ul className="task-list">{anytime.map((task) => taskRow(task))}</ul> : <p className="empty-section">Nothing here yet. Add a task without a time.</p>}
-            <button className="add-inline" onClick={() => setModal({ postpone: false })}><Icon name="plus" size={16} />Add another task</button>
+          <section className="task-section anytime-section" aria-labelledby="anytime-heading"><div className="section-heading"><h3 id="anytime-heading">Anytime Tasks</h3></div>{anytime.length ? <ul className="task-list">{anytime.map((task) => taskRow(task))}</ul> : <p className="empty-section">No anytime tasks for this day.</p>}
+            <button className="add-inline" disabled={pending || editorLoading} onClick={() => void openEditor()}><Icon name="plus" size={16} />Add another task</button>
           </section>
         </section>
       </> : <section className="placeholder-panel"><span className="small-tag">Not implemented yet</span><h2>{view === "Performance" ? "Performance arrives in Phase 2." : "Settings will be available in a later milestone."}</h2><p>{view === "Performance" ? "Points, rankings, and analytics are outside this preview." : "Account preferences and calendar connections are not connected in this preview."}</p><button className="button secondary" onClick={() => setView("Dashboard")}>Back to Dashboard</button></section>}
-      <footer className="preview-note"><span className="local-indicator" />Sample data only. All changes reset when you reload.</footer>
-      <p className="sr-only" role="status" aria-live="polite">{notice}</p>
+      {ready && <footer className="preview-note"><span className="local-indicator" />Workspace timezone: {ready.timezone}</footer>}
+      <p className="sr-only" role="status" aria-live="polite">{pending ? "Loading selected day…" : ready ? `Showing ${formatDate(selected, { weekday: "long", month: "long", day: "numeric" })}.` : ""}</p>
     </main>
-    {modal && <TaskModal task={modal.task} tasks={tasks} date={selected} postpone={modal.postpone} onSave={save} onDelete={remove} onClose={() => setModal(null)} />}
+    {editor && <TaskModal editor={editor} date={selected} onSaved={saved} onClose={() => setEditor(null)} onDelete={(current) => { setEditor(null); setLifecycle({ mode: "delete", editor: current }); }} />}
+    {lifecycle && <LifecycleDialog editor={lifecycle.editor} mode={lifecycle.mode} onSaved={saved} onClose={() => { setLifecycle(null); router.refresh(); }} />}
   </div>;
 }
 
-function TaskRow({ task, parent, overdue, onToggle, onEdit, onPostpone, onCancel, onDelete }: {
-  task: Task; parent?: string; overdue: boolean;
-  onToggle: () => void; onEdit: () => void; onPostpone: () => void; onCancel: () => void; onDelete: () => void;
-}) {
-  return <li className={`task-row ${task.status}`}>
-    <input className="completion-checkbox" type="checkbox" aria-label={`Complete ${task.title}`} checked={task.status === "completed"} disabled={task.status === "canceled"} onChange={onToggle} />
-    <div className="task-time">{overdue ? <span className="due-label">{formatDate(task.date, { month: "short", day: "numeric" })}{task.time && <small>{formatTime(task.time)}</small>}</span> : task.time ? <time dateTime={`${task.date}T${task.time}`}>{formatTime(task.time)}</time> : <span className="anytime-dash" aria-hidden="true">—</span>}</div>
-    <div className="task-name"><button className="task-title" onClick={onEdit}>{task.title}</button>{parent && <span className="parent-label">Subtask of {parent}</span>}{task.status === "canceled" && <span className="canceled-label">Canceled</span>}</div>
-    <span className={`category-label category-${task.category}`}>{categoryFor(task.category).name}</span>
+function TaskRow({ task, overdue, accountTimezone, loading, onEdit, onComplete, onLifecycle }: { task: ReadTask; overdue: boolean; accountTimezone: string; loading: boolean; onEdit: () => void; onComplete: () => void; onLifecycle: (mode: LifecycleMode) => void }) {
+  const original = `${formatDate(task.originalDate, { month: "short", day: "numeric", year: "numeric" })}${task.originalTime ? ` ${formatTime(task.originalTime)}` : ""} (${task.originalTimezone})`;
+  return <li className={`task-row ${task.status}`} title={`Originally scheduled: ${original}`}>
+    <input className="completion-checkbox" type="checkbox" aria-label={`${task.status === "completed" ? "Reopen" : "Complete"} ${task.title}`} checked={task.status === "completed"} disabled={loading || task.status === "canceled"} onChange={onComplete} />
+    <div className="task-time">{overdue ? <span className="due-label">{formatDate(task.originalDate, { month: "short", day: "numeric" })}{task.originalTime && <small>{formatTime(task.originalTime)}</small>}</span> : task.time ? <time dateTime={`${task.scheduledDate}T${task.time}`}>{formatTime(task.time)}</time> : <span className="anytime-dash" aria-hidden="true">—</span>}</div>
+    <div className="task-name"><button className="task-title" disabled={loading || task.status !== "open"} title={task.status === "open" ? "Edit task" : "Reopen completed tasks before editing; canceled tasks cannot be edited."} onClick={onEdit}>{task.title}</button>{task.parentTitle && <span className="parent-label">Subtask of {task.parentTitle}</span>}{task.timezone !== accountTimezone && <span className="parent-label">{task.timezone}</span>}{task.date !== task.scheduledDate && <span className="sr-only">Originally scheduled: {original}</span>}</div>
+    <span className={`category-label category-${task.categoryStyle}`}>{task.categoryName}</span>
     <details className="row-menu" onKeyDown={(event) => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
       <summary aria-label={`Actions for ${task.title}`}><span aria-hidden="true">···</span></summary>
-      <div className="row-menu-content" onClick={(event) => { const details = event.currentTarget.closest("details"); if (details) details.open = false; }}>
-        <button onClick={onPostpone} disabled={task.status === "canceled"}>Postpone</button><button onClick={onCancel} disabled={task.status === "canceled"}>Cancel task</button><button className="danger" onClick={onDelete}>Delete</button>
-      </div>
+      <div className="row-menu-content"><button disabled={loading || task.status !== "open"} onClick={(event) => { event.currentTarget.closest("details")!.open = false; onLifecycle("postpone"); }}>Postpone</button><button disabled={loading || task.status !== "open"} onClick={(event) => { event.currentTarget.closest("details")!.open = false; onLifecycle("cancel"); }}>Cancel task</button><button className="danger" disabled={loading} onClick={(event) => { event.currentTarget.closest("details")!.open = false; onLifecycle("delete"); }}>Delete</button></div>
     </details>
   </li>;
 }

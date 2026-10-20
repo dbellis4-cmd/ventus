@@ -132,10 +132,11 @@ test("authorization fails closed for anonymous, forged, revoked, and unavailable
     assert.equal(await users.getVerifiedUser(), null);
     const page = load("app/page.tsx", {
       "@/lib/auth/user": users, "next/navigation": { redirect },
+      "@/lib/server/workspace": { loadWorkspace() { throw new Error("Must not read tasks"); } },
       "@/components/dashboard/dashboard": { Dashboard() { throw new Error("Must not render"); } },
       "@/components/auth/session-guard": { SessionGuard() { throw new Error("Must not render"); } },
     });
-    await assert.rejects(page.default(), (error) => error.destination === "/login");
+    await assert.rejects(page.default({}), (error) => error.destination === "/login");
     const session = load("app/auth/session/route.ts", { "@/lib/auth/user": users });
     const response = await session.GET();
     assert.equal(response.status, 401);
@@ -191,6 +192,21 @@ test("canonical callback configuration rejects unsafe origins and has no product
   }
   assert.equal(load("lib/auth/site-url.ts", {}, { NODE_ENV: "development" }).getSiteUrl(), "http://localhost:3000");
   assert.equal(load("lib/auth/site-url.ts", {}, { SITE_URL: "https://ventus.example.test/", NODE_ENV: "production" }).getSiteUrl(), "https://ventus.example.test");
+});
+
+test("Server Action origin accepts the matching local loopback host but rejects cross-origin requests", () => {
+  const local = load("lib/auth/site-url.ts", {}, { NODE_ENV: "development" });
+  assert.equal(local.getSiteUrl(), "http://localhost:3000");
+  assert.equal(local.isValidActionOrigin("http://127.0.0.1:3000", "127.0.0.1:3000"), true);
+  assert.equal(local.isValidActionOrigin("http://localhost:3000", "localhost:3000"), true);
+  assert.equal(local.isValidActionOrigin("http://127.0.0.1:3000", "localhost:3000"), false);
+  assert.equal(local.isValidActionOrigin("http://localhost:3000", "127.0.0.1:3000"), false);
+  assert.equal(local.isValidActionOrigin("http://attacker.test", "attacker.test"), false);
+  assert.equal(local.isValidActionOrigin(null, "127.0.0.1:3000"), false);
+
+  const deployed = load("lib/auth/site-url.ts", {}, { NODE_ENV: "production", SITE_URL: "https://ventus.example.test" });
+  assert.equal(deployed.isValidActionOrigin("https://ventus.example.test", "ventus.example.test"), true);
+  assert.equal(deployed.isValidActionOrigin("http://127.0.0.1:3000", "127.0.0.1:3000"), false);
 });
 
 test("real SSR SDK writes login cookies, clears them on logout, and rejects replay of a revoked session (mock Auth HTTP)", async () => {

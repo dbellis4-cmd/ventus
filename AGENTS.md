@@ -92,6 +92,8 @@ Preserve task occurrence and completion history so future analytics and reward c
 
 ## 6. Codex Workflow
 
+Before beginning a development milestone, consult TOOLKIT.md for relevant skills, libraries, and reference implementations. Install or integrate resources only when they provide a demonstrated benefit and are authorized.
+
 For each development request:
 
 1. Inspect only the relevant files and existing conventions.

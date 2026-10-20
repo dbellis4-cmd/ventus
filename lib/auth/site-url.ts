@@ -9,3 +9,17 @@ export function getSiteUrl() {
   }
   return url.origin;
 }
+
+export function isValidActionOrigin(origin: string | null, host: string | null): boolean {
+  const siteUrl = getSiteUrl();
+  if (process.env.NODE_ENV !== "development" || !origin) return origin === siteUrl;
+  try {
+    const url = new URL(origin);
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return url.origin === origin && url.host === host;
+    }
+    return origin === siteUrl;
+  } catch {
+    return false;
+  }
+}

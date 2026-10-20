@@ -1,6 +1,6 @@
 # Ventus
 
-A minimal Next.js application using TypeScript, Tailwind CSS, ESLint, and the App Router.
+A task management application using Next.js, TypeScript, Tailwind CSS, Supabase Authentication, and persistent PostgreSQL tasks.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ npm ci
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Edit `app/page.tsx` to update the homepage.
+Open [http://localhost:3000](http://localhost:3000) and sign in to your Ventus workspace.
 
 ## Checks
 
@@ -23,7 +23,11 @@ npm run lint
 npm run typecheck
 npm run build
 npm run test:auth
+npm run test:tasks
+npm run test:browser
 ```
+
+The browser suite starts an isolated local Next.js server and disposable mock Supabase API. It uses the installed Google Chrome binary and does not access hosted accounts or tasks.
 
 To serve a production build locally, run `npm run build` followed by `npm start`.
 
@@ -31,9 +35,9 @@ To serve a production build locally, run `npm run build` followed by `npm start`
 
 Ventus uses email/password authentication and standard Supabase SSR cookie
 sessions. `/login`, `/signup`, `/forgot-password`, and `/reset-password` provide
-login, registration, and recovery. `/` is the protected Dashboard; task data
-remains temporary and in memory. There are no application tables or Calendar
-connections.
+login, registration, and recovery. `/` is the protected Dashboard; task data is
+stored through authenticated, owner-restricted Supabase RPCs and ownership RLS.
+Google Calendar synchronization is not connected.
 
 ### Milestone 2 verification — October 19, 2026
 
@@ -54,7 +58,8 @@ regression tests use mocked Auth HTTP and do not establish successful live email
 recovery. Preserve the recovery fixes and SSR configuration while awaiting the
 manual retry. Session expiry/refresh, Back/multiple-tab behavior, deployed cache
 isolation, and signup abuse controls require their own verification before public
-release. No application tables, persistent tasks, or RLS policies exist yet.
+release. This paragraph records the Milestone 2 checkpoint; persistent tasks
+and RLS were added in Milestone 3.
 
 ### Local authentication setup
 
@@ -110,7 +115,7 @@ Sign out revokes the current session (`scope: local`), clears its cookies, and
 discards client navigation/task state. A Dashboard guard rechecks on focus,
 visibility changes, restored pages, sign-out notifications, and periodically.
 It hides the workspace if verification fails and reloads on account changes.
-Other devices remain signed in. Future database policies must account for JWT
+Other devices remain signed in. Database policies must account for JWT
 expiry/revocation semantics; do not rely on a UI guard for authorization.
 
 `npm run test:auth` runs 16 automated tests using mocked Auth responses, including
@@ -125,8 +130,8 @@ passes; it does not imply every edge case below has been checked:
   verify the old password fails and the new one works. Reused/expired links fail.
 - Sign out, then try Back, reload, direct Dashboard access, and a second tab.
 - Verify session expiry/refresh and server-side revocation with the real project.
-- Confirm two accounts start independent in-memory previews. Database ownership
-  and RLS tests must be added with persistence; they cannot be verified yet.
+- Confirm two accounts see only their own persistent tasks. The owner reported
+  this browser check passed in Milestone 3; direct hosted RLS tampering remains unverified.
 
 Before public registration, review Supabase rate limits, IP/proxy behavior,
 password/email settings, and bot protection. No app-level distributed rate limiter

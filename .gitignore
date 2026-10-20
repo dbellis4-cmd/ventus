@@ -3,10 +3,13 @@ node_modules/
 
 # Build output and generated files
 /.next/
+/.next-browser-test/
 /out/
 /build/
 /dist/
 /coverage/
+/test-results/
+/playwright-report/
 *.tsbuildinfo
 next-env.d.ts
 
