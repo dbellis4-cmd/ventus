@@ -23,7 +23,7 @@ Finalization passed lint, typecheck, 16 authentication tests, documentation/stat
 - `app/page.tsx`, `lib/auth/`, `lib/supabase/`, `app/auth/`: existing protected page and SSR authentication.
 - `components/dashboard/`, `lib/tasks/demo.ts`, `app/globals.css`: approved dashboard, modal and current fixture model.
 
-Branch `main`, HEAD `9f0e2cc` (`feat: implement Supabase authentication`), matches cached `origin/main`; no fresh remote check was made. Preexisting changes: `SECURITY.md`, package/lockfile and untracked `supabase/`. This task adds the two context files and edits `AGENTS.md`. Database work is not committed. Preserve this working tree.
+Branch `main`; published foundation commit **`de53f0dc1b1909a12cd41d548c9ffe2354de23ba`** (`feat: establish secure task database foundation`). Push to `origin/main` succeeded and the tree was clean afterward. This documentation-only checkpoint records that identifier; check `git log -1` and actual branch/status for the latest context commit. Both migrations, tests/reports, approved CLI dependency and project documentation are now versioned. No application features or SQL were changed during finalization. Credentials, temporary files and build output were excluded.
 
 ## Immediate next action and constraints
 

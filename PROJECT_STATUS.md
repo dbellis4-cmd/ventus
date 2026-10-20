@@ -18,13 +18,12 @@ Evidence: [local results](supabase/tests/RESULTS.md), [test harness](supabase/te
 
 ## Git snapshot
 
-- Branch: `main`; HEAD `9f0e2cce8bab268737b24ae68e1f93e42867251b` — `feat: implement Supabase authentication`.
-- Prior commits: `2a66cac` — completed interactive dashboard; `77612b1` — initial application.
-- Origin: [dbellis4-cmd/ventus](https://github.com/dbellis4-cmd/ventus).
-- HEAD and the locally cached `origin/main` reference are equal (0 ahead / 0 behind). No fetch or remote synchronization check was performed for this documentation task.
-- Preexisting uncommitted changes: `SECURITY.md`, `package.json`, `package-lock.json`; entire `supabase/` directory is untracked. The package change adds the approved project-local Supabase CLI development dependency.
-- This context task adds `PROJECT_STATUS.md`, `HANDOFF.md` and edits `AGENTS.md`. Nothing is committed or pushed. The applied database work is **not yet preserved in Git history**.
-- `.env.local` exists and is ignored by `.gitignore`; do not copy its contents into documentation. Required configuration names: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+- Branch: `main`; foundation commit **`de53f0dc1b1909a12cd41d548c9ffe2354de23ba`** — `feat: establish secure task database foundation`.
+- The foundation commit was pushed successfully to [origin/main](https://github.com/dbellis4-cmd/ventus). The working tree was clean immediately after that push; a documentation-only follow-up records this identifier and finalization results in the context files. Check actual HEAD/Git status rather than assuming this foundation identifier is the latest documentation commit.
+- Prior milestones: `9f0e2cc` — authentication; `2a66cac` — interactive dashboard; `77612b1` — initial application.
+- The foundation commit includes both unchanged migrations, the isolated verification harness/reports, schema/operation/test documentation, security/architecture/context updates and the previously approved Supabase CLI development dependency/lockfile. The database foundation is now preserved in Git; no application feature changes are included.
+- `.env.local` exists and remains ignored; credentials, temporary CLI/status files, fixture data, dependencies and build artifacts were excluded. Required public configuration names: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+- Finalization performed no SQL, Supabase settings changes, dependency installation or deployment. Synchronization of the subsequent documentation checkpoint is verified before ending the conversation.
 
 ## Hosted database record
 
@@ -91,6 +90,6 @@ Finalization checks (October 19 America/Phoenix / October 20 UTC):
 - Migration hashes still match both local runtime evidence and hosted-recorded source. The 132 database assertions are prior evidence, not rerun; no SQL or Supabase operation occurred.
 - Limited credential-pattern scan of all 52 then-tracked/pending source files passed. Ignore checks exclude `.env.local`, dependencies/build output, secret paths, bytecode and CLI caches. No temporary evidence, generated data, credentials or application-feature changes are included.
 - Lockfile review: 15 added development-only package entries for the approved Supabase CLI; existing package entries unchanged. No new install or dependency remediation was performed.
-- Fresh `git fetch origin main` succeeded; pre-finalization HEAD matched the fetched branch. Publication/commit identifiers will be updated after the requested commit and push.
+- Fresh `git fetch origin main` succeeded; pre-finalization HEAD matched the fetched branch. Foundation commit `de53f0dc1b1909a12cd41d548c9ffe2354de23ba` then pushed successfully; the context-only checkpoint records that published identifier without changing migrations or application files.
 
 Unresolved default Turbopack environment failure, password recovery, hosted user-level tests, application persistence and all other release gates above remain open.
