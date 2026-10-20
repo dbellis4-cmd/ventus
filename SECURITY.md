@@ -24,6 +24,8 @@ Provider documentation describes capabilities, not proof that Ventus has configu
 
 ## Current evidence and limitations
 
+- Milestone 2 implements email/password signup/login/recovery, SSR callbacks, current-session logout, and server-protected Dashboard access. Sixteen automated tests cover validation, safe errors/redirects, anonymous/revoked denial, the real SSR SDK cookie lifecycle with mocked Auth HTTP, and refresh cache headers. Recovery regressions additionally verify PKCE cookie persistence, SDK recovery intent without `next`, strict mutation/callback cookie writes, missing-verifier denial, and token-hash session creation/replay rejection. Production HTTP checks verify anonymous redirects, no-store headers, and cross-origin Server Action rejection. Lint, typecheck, build, and all authentication tests pass at finalization. No application tables or RLS exist. Earlier baseline evidence below is historical.
+- **Manual verification reported by the project owner on October 19, 2026:** registration, login, logout, and protected Dashboard access passed. **Password recovery is pending manual verification due to Supabase rate limiting; it has not passed.** Automated/mocked recovery checks do not close this item. Live expiry/refresh, Back/multiple-tab behavior, deployed cache isolation, and project abuse controls remain separate verification requirements. This is local milestone evidence, not public-release approval.
 - The project contains a minimal Next.js 16 / React 19 page. No auth flow, database policies, backend task operations, Google Calendar integration, or security test suite exists in the reviewed files. External provider settings were not inspected.
 - `.gitignore` excludes `.env*` except `.env.example`, common credential/key files, dependencies, and build output. Representative paths passed `git check-ignore`. Any example environment file must contain placeholders only.
 - Reviewed tracked application/configuration files and ran a limited credential-pattern scan against `main` at `77612b1`, the only committed revision. No matches were found. This is not an exhaustive secret audit or a client-bundle inspection.
@@ -52,7 +54,7 @@ Provider documentation describes capabilities, not proof that Ventus has configu
 - **Objective:** Use the current publishable key for frontend Supabase access. Never ship secret keys or legacy service-role keys. A publishable key identifies the application, not the user, and does not replace authorization or RLS. [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys).
 - **When:** Before adding a frontend Supabase client.
 - **Verify:** Inspect client initialization and production bundles; test anonymous and authenticated access against policies using the publishable key.
-- **Status:** Not Started — Supabase is not integrated.
+- **Status:** In Progress — client factories accept only publishable-key configuration and reject other key prefixes. The owner reports successful registration/login in the local application. Privileged-key exclusion and future database-policy/bundle verification remain required before release.
 
 ### 4. Enable Row Level Security
 
@@ -73,7 +75,7 @@ Provider documentation describes capabilities, not proof that Ventus has configu
 - **Objective:** Validate sessions on the server and authorize every protected read/write, Route Handler, and Server Action. Never trust UI gating, client user IDs, or unvalidated cookie contents. Prevent unauthorized requests from reaching privileged operations. [Next.js data security](https://nextjs.org/docs/app/guides/data-security).
 - **When:** With the first protected operation.
 - **Verify:** Test absent, forged, expired, and signed-out sessions against each protected entry point. Define and test immediate logout/revocation behavior; a locally valid JWT alone may outlive the session that issued it. [Supabase session guidance](https://supabase.com/docs/guides/auth/server-side/advanced-guide).
-- **Status:** Not Started — no protected application operations exist.
+- **Status:** In Progress — Dashboard, session endpoint, and password mutation verify users via Supabase `getUser()`. Automated anonymous/forged/revoked/outage denial and production anonymous HTTP checks pass. The owner reports manual login, logout, and protected Dashboard access passed. Live password recovery is pending due to Supabase rate limiting; per-record authorization awaits Milestone 3.
 
 ### 7. Restrict records to authorized users
 
@@ -94,14 +96,14 @@ Provider documentation describes capabilities, not proof that Ventus has configu
 - **Objective:** Use a maintained session solution; require production `Secure` cookies, appropriate `SameSite`, narrow scope, expiration, and `HttpOnly` for server-only session cookies. Protect cookie-authenticated mutations against CSRF and validate origins. Define refresh, rotation, logout, revocation, and cache isolation. Do not cache private responses across users. Resolve the token-architecture decision below before selecting a browser-client pattern. [OWASP sessions](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html), [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/advanced-guide).
 - **When:** Before introducing login or protected pages.
 - **Verify:** Inspect cookie flags; test refresh/expiry, replay after logout under the approved policy, cross-site mutations, and sequential requests by different users through deployed caches.
-- **Status:** Not Started — no session implementation exists.
+- **Status:** In Progress — approved SSR cookies use production Secure, SameSite=Lax, host-only scope, and no-store response headers. Logout revokes the current session and discards client navigation state; the owner reports manual logout passed. Real SDK cookie clearing/revoked replay with mocked Auth, refresh forwarding, and production cross-origin rejection pass. Live password recovery is pending due to Supabase rate limiting. Expiry/refresh, multiple-tab/back behavior, and deployed cache isolation remain pending.
 
 ### 10. Delegate password storage to Supabase Auth
 
 - **Objective:** Use Supabase Auth's managed password hashing; never store plaintext, reversible passwords, or custom password hashes in Ventus tables or logs. Supabase documents salted bcrypt hashing. Review password policy and reset/reauthentication behavior. [Supabase password security](https://supabase.com/docs/guides/auth/password-security).
 - **When:** Before password registration, login, or reset is enabled.
 - **Verify:** Confirm all password operations use Auth; inspect application tables/logging for prohibited storage; test registration, reset, and unauthorized password-change rejection.
-- **Status:** Not Started — no password flow exists. Absence of custom storage does not verify a future Auth integration.
+- **Status:** In Progress — all password operations delegate to Supabase Auth; no custom password storage or credential logging is added. Registration/login passed manual verification reported by the owner. New-password length/confirmation and authenticated update checks pass automated tests. Password recovery remains pending manual verification due to Supabase rate limiting; reset/reauthentication and provider policy verification are not marked passed.
 
 ## Phase 2 — Authentication, Backend, and Integrations
 
@@ -110,14 +112,14 @@ Provider documentation describes capabilities, not proof that Ventus has configu
 - **Objective:** Limit automated login, signup, recovery, and verification attempts. Review provider limits and enforce limits on application-owned endpoints without enabling trivial account lockout attacks. [Supabase rate limits](https://supabase.com/docs/guides/auth/rate-limits).
 - **When:** Before publicly exposing authentication endpoints.
 - **Verify:** Test repeated requests, throttling and recovery, direct provider access, and proxy/IP handling; document selected thresholds and evidence.
-- **Status:** Not Started — no authentication configuration has been verified.
+- **Status:** In Progress — requests use Supabase Auth and map provider throttling errors to safe feedback. Provider thresholds, server IP/proxy effects, distributed application limits, and live throttling behavior remain unverified; required before public registration.
 
 ### 12. Protect public registration from bots
 
 - **Objective:** Assess automated signup abuse; apply provider-supported CAPTCHA or equivalent justified controls where appropriate. Validate challenges on the server and preserve accessible self-service signup. [Supabase bot protection](https://supabase.com/docs/guides/auth/auth-captcha).
 - **When:** Before opening public registration; reassess with observed abuse.
 - **Verify:** Test missing, invalid, expired, and replayed challenges where enabled; check that bypassing frontend validation does not create an account. Record any alternative control and rationale.
-- **Status:** Not Started — no public registration flow or abuse assessment exists.
+- **Status:** Not Started — signup UI is implemented locally, but no bot-control assessment or challenge integration exists. Resolve before public release.
 
 ### 13. Parameterize database queries
 
@@ -210,7 +212,7 @@ Use the [Supabase production checklist](https://supabase.com/docs/guides/deploym
 ## Alignment and decisions requiring approval
 
 - `AGENTS.md` governs workflow and `PRD.md` governs product behavior. This checklist adds verification requirements without authorizing product Phase 2 or new services. Supabase, testing tools, and Vercel remain subject to the existing approval requirements.
-- **Session architecture:** `AGENTS.md` prohibits exposing access tokens to the browser; `PRD.md` prohibits unnecessary external-token exposure. Supabase's documented browser-client pattern requires browser-readable auth tokens. Decide the architecture and clarify any intended distinction between Supabase session tokens and external Google tokens before implementation; do not silently relax `AGENTS.md`. Google tokens and elevated Supabase keys remain server-only. [Supabase SSR guidance](https://supabase.com/docs/guides/auth/server-side/advanced-guide).
+- **Session architecture approved for Milestone 2:** `AGENTS.md` permits browser-readable Supabase user-session access/refresh tokens through the standard SSR flow. `PRD.md` still prohibits unnecessary external-token exposure. Google tokens and elevated Supabase keys remain server-only. This approval does not verify live session security or authorize public release. [Supabase SSR guidance](https://supabase.com/docs/guides/auth/server-side/advanced-guide).
 - **Retention and recovery:** Deleted/canceled task retention, account deletion, backup retention, and restore behavior require explicit decisions compatible with private accounts and PRD historical integrity. No retention period or paid recovery plan is selected here.
 - **Integrations and rewards:** PRD decisions about calendar conflicts, external deletions, recurrence exceptions, time zones, season locking, and retroactive corrections remain unresolved. Security tests must follow approved behavior rather than inventing it.
 - **Deployment:** Host, domains, monitoring, encryption/key-management approach, rate-limit thresholds, bot-control choice, and operational reporting channel are not yet selected or verified. Provider references are guidance, not configuration evidence.

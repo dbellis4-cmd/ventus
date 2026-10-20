@@ -17,9 +17,10 @@ Current:
 - Tailwind CSS 4
 - ESLint
 - npm
+- Supabase email/password Authentication with official clients (`@supabase/supabase-js` and `@supabase/ssr`) and SSR sessions; registration, login, logout, and protected Dashboard access manually verified by the project owner; password recovery pending manual verification due to Supabase rate limiting
 
 Planned, subject to approval:
-- Supabase PostgreSQL and Authentication
+- Supabase PostgreSQL application tables and RLS; production Auth configuration and release verification
 - Google Calendar API
 - shadcn/ui
 - Playwright
@@ -80,7 +81,8 @@ Detailed requirements belong in separate project documentation rather than this 
 - Enforce authorization on protected backend and database operations.
 - Design for strict isolation between user accounts.
 - Use Supabase Row Level Security when the database is introduced.
-- Never expose service-role keys, access tokens, or other secrets to the browser.
+- Never expose privileged application credentials (including Supabase secret/service-role keys) or Google OAuth access/refresh tokens to the browser.
+- Browser-side Supabase user-session access/refresh tokens are permitted through the approved standard Supabase SSR authentication flow. Treat them as sensitive bearer credentials; enforce server-side authorization, RLS when the database is introduced, XSS/CSRF protections, and secure session handling.
 - Never commit credentials, environment files containing secrets, or private user data.
 - Keep Google Calendar credentials and synchronization logic secure.
 - Use reliable identifiers and idempotent operations where duplicate processing is possible.
@@ -111,6 +113,7 @@ Current project commands:
 - `npm run lint`
 - `npm run typecheck`
 - `npm run build`
+- `npm run test:auth`
 - `npm run dev`
 
 Run relevant checks after making changes.

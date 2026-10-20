@@ -8,7 +8,7 @@
 
 `PRD.md` governs behavior; `AGENTS.md` governs development; `SECURITY.md` governs release. Recommendations here do not approve unresolved behavior or external services.
 
-The working Next.js foundation has npm checks and GitHub history. Authentication, persistence, task workflows, and integration tests are absent. Implement product Phase 1 incrementally; Phase 2 remains deferred.
+The working Next.js foundation has npm checks and GitHub history. Milestone 1 task workflows use in-memory fixtures. Milestone 2 includes email/password auth pages/actions, SSR callbacks, logout, and server-protected Dashboard access. At finalization on October 19, 2026, the project owner reported registration, login, logout, and protected Dashboard access passed manual verification. Password recovery is pending manual verification due to Supabase rate limiting; it is not passed. All 16 automated authentication tests, lint, typecheck, and build pass. Persistence and remaining release checks are pending. Product Phase 2 remains deferred.
 
 ## 2. Technology assessment
 
@@ -17,7 +17,7 @@ The working Next.js foundation has npm checks and GitHub history. Authentication
 | Next.js 16.4.2, React 19.3.1, TypeScript | Existing | Shared frontend/backend deployment. Follow installed guides, including `proxy.ts` conventions. |
 | Tailwind CSS 4 | Existing | Consistent responsive styling without another styling system. |
 | shadcn/ui | Proposed | Accessible modal/menu primitives when needed; copied code requires maintenance. Native controls suffice initially. |
-| Supabase PostgreSQL and Auth | Proposed; requires approval | Transactions, managed identity, and RLS fit private histories. Add official `@supabase/supabase-js` and `@supabase/ssr` at authentication. Review quotas, backups, and costs. |
+| Supabase PostgreSQL and Auth | Auth implemented; application schema/RLS require approval | Official `@supabase/supabase-js` and `@supabase/ssr` are installed. Review the proposed database model, quotas, backups, and costs before migrations. |
 | rrule.js (`rrule`) | Proposed; requires approval | Recurrence adapter avoids custom algorithms; validate timezone semantics and maintenance/security. [Guidance](https://github.com/jkbrzt/rrule). |
 | Google Calendar API | Product integration approved; technical setup pending | Synchronize linked events. OAuth consent verification, quotas, and refresh failures introduce operational work. |
 | Existing checks; Node test runner; Playwright | Checks existing; testing proposed | Built-in runner for pure rules after TypeScript compatibility validation; Playwright for workflows. Consider another unit runner only for simpler configuration. |
@@ -71,7 +71,7 @@ Store schedules, snapshots, corrections, and tombstones; calculate counts, overd
 
 ## 5. Authentication and security
 
-**Requires approval:** standard Supabase SSR cookie sessions. Browser authentication uses a publishable key and user-session credentials. Next.js validates users for protected operations and forwards their JWTs to Postgres. Managed Auth handles public signup/login/recovery/logout; confirm email-verification policy.
+**Approved for Milestone 2:** standard Supabase SSR cookie sessions and the official client packages. Browser authentication uses a publishable key and user-session credentials. Registration/login/recovery actions and email callbacks are implemented. Dashboard access, password updates, and the session endpoint verify users with `getUser()`; the proxy refreshes sessions with `getClaims()`. Logout uses local scope and clears navigation state. Mocked tests and anonymous production HTTP checks pass. The owner reports registration, login, logout, and protected Dashboard access manually passed. Password recovery is pending manual verification due to Supabase rate limiting, despite passing mocked regression tests. Preserve those fixes and the session configuration. The existing email-verification policy is respected; confirm it and signup abuse controls before public release. Database requests will carry user JWTs when persistence is introduced.
 
 Browser-readable user access/refresh tokens remain sensitive bearer credentials. Application secret/service-role keys bypass RLS; these and Google tokens must remain server-only.
 
@@ -79,7 +79,7 @@ Use `Secure`, appropriate `SameSite` (normally `Lax`), narrow cookie scope, and 
 
 A server-only `HttpOnly` alternative reduces JavaScript token exposure but requires different auth/refresh handling and server-mediated access. Prefer standard SSR for maintainability unless stricter isolation is required.
 
-Proposed replacement for the blanket token prohibition in `AGENTS.md`, **not applied**: “Never expose privileged application credentials or Google OAuth tokens to the browser. Supabase user-session tokens may use the approved authentication flow; treat them as sensitive and enforce RLS, XSS, CSRF, and session protections.”
+`AGENTS.md` now permits browser-side Supabase user-session tokens through this approved flow, while keeping privileged application credentials and Google OAuth tokens server-only. RLS, XSS, CSRF, and session protections remain required.
 
 Enable ownership RLS from the first migration. Test anonymous/two-user database access. Deny user access to provider credentials and protected writes; review functions/views for bypass. [RLS guidance](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
@@ -159,7 +159,7 @@ Record redacted failures, retry backlog, stale connections, and alerts. Select b
 | Milestone | Deliverable and dependencies | Verification |
 |---|---|---|
 | 1. Interactive dashboard | Existing React/Tailwind; local fixtures, Sunday–Saturday navigation, sections, completion toggles, shared create/edit modal. Explicitly temporary in-memory state. | Date/week navigation, sorting, modal editing, keyboard/touch behavior, responsive layout, existing checks. |
-| 2. Authentication foundation | Approved Supabase/session choice; registration/login/logout/settings shell and RLS test harness. | Anonymous denial, two-user isolation, expiry/refresh/logout and signup abuse controls. |
+| 2. Authentication foundation | Registration/login/logout, protected Dashboard, SSR clients/callbacks, and recovery implementation finalized. Settings remain a placeholder; database/RLS harness awaits persistence. | Owner-reported manual registration/login/logout/protected Dashboard passes; 16 automated tests and npm checks pass. Password recovery pending manual verification due to Supabase rate limiting. Remaining session/abuse checks still gate release. |
 | 3. Persistent task lifecycle | Approved schema/categories; CRUD, dated subtasks, completion corrections, postponement/cancellation/history. | Transaction rollback, ownership tampering, stale edits, no automatic parent completion. |
 | 4. Recurrence and missed tasks | Approved rrule/time/rollover/series rules. | DST/month boundaries, bounded catch-up, duplicate retries, historical preservation. |
 | 5. Calendar outbound | Approved OAuth/scopes/mapping; encrypted connections, links, durable jobs. | Retry without duplicate events, refresh/revocation, unrelated-event safety. |
@@ -174,8 +174,8 @@ Record redacted failures, retry backlog, stale connections, and alerts. Select b
 | Application stack | Retain installed Next.js/React/TypeScript/Tailwind | Existing | Working foundation. |
 | Product scope | Implement PRD Phase 1; defer rewards | Approved | Existing product direction. |
 | System organization | Modular monolith; PostgreSQL canonical tasks | Proposed | One codebase and durable integrity boundary. |
-| Persistence/auth | Supabase with user-scoped RLS | Requires Approval | New service and credentials. |
-| Sessions | Standard SSR; revise blanket token prohibition | Requires Approval | Supported flow with explicit bearer-token tradeoff. |
+| Persistence/auth | Supabase with user-scoped RLS | Auth approved/implemented; schema and migrations require approval | Database modeling and isolation tests must precede persistent user data. |
+| Sessions | Standard Supabase SSR; browser-readable user-session tokens | Approved for Milestone 2 | Registration/login/logout/protected Dashboard manually passed per owner; password recovery pending manual verification due to Supabase rate limiting. |
 | History/recurrence | Occurrences, schedule revisions, append-only activity; rrule | Proposed | Preserve corrections and future scoring inputs. |
 | Integration execution | Postgres jobs and bounded polling workers | Proposed | Durable retries without a separate broker. |
 | Calendar semantics | Per-occurrence export; pause conflicts | Requires Approval | Observable behavior and interoperability tradeoffs. |
@@ -185,9 +185,28 @@ Record redacted failures, retry backlog, stale connections, and alerts. Select b
 
 | Priority / decision | Risk or required approval | Resolve by |
 |---|---|---|
-| High: session rules | Approve SSR browser-readable user tokens and specific `AGENTS.md` amendment; privileged/Google tokens remain server-only. | Milestone 2 |
+| High: session verification | Core registration/login/logout/protected Dashboard manually passed per owner. Recovery is pending manual verification due to Supabase rate limiting. Verify expiry/refresh, revocation, Back/multiple-tab behavior, and deployed cache isolation before public release; privileged/Google tokens remain server-only. | Milestone 2 follow-up / release |
 | High: lifecycle semantics | Approve categories, overdue cutoffs, timezone/travel/DST rules, recurrence editing, subtask recurrence, and unfinished recurrence collision behavior. | Milestones 3–4 |
 | High: Calendar mapping | Approve target calendar/scope, duration, all-day mapping, export horizon, cancellation/deletion/uncheck behavior, external deletion, conflicts, and reconnect policy. OAuth verification may delay release. | Milestones 5–6 |
 | High: sync reliability/cost | Approve freshness target and scheduling budget; test quotas, retries, pagination, leases, and refresh concurrency. | Milestone 6, before release |
 | High: retention/security | Approve deletion/backup retention and recovery targets; resolve audit findings and verify RLS. | Database design through release |
 | Deferred: scoring | Late flexible-task XP wording, correction/undo effects, locked-season edits, zero-point denominators, and percentage boundaries remain unresolved. | Before product Phase 2 |
+
+## 13. Milestone 3 entry decisions
+
+The following decisions require approval before implementing migrations. This is
+preparation only; no application tables, policies, or persistent task code are
+authorized by finalizing Milestone 2.
+
+| Decide first | Required outcome |
+|---|---|
+| Initial schema and settings bootstrap | Approve the first subset of the proposed `user_settings`, `categories`, `tasks`, `task_schedules`, `task_occurrences`, and `task_activity` model; decide how a user's settings/categories are created. Defer Calendar/job/reward tables. |
+| Ownership, grants, and RLS | Define owner references to Supabase Auth users, immutable ownership/protected fields, owner-matching parent/subtask references, allowed operations, and anonymous denial. Approve direct Data API tests with anonymous and two-user identities before exposing records. |
+| Categories and behavior | Finalize fixed defaults versus user-managed categories, fixed/flexible/deadline behavior, and allowed overrides. PRD examples are not an approved fixed category list. |
+| Date/time and lifecycle storage | Decide account timezone, date-only anytime tasks, start/end-time constraints, original versus changed schedules, parent-occurrence/subtask relationships, and actual versus recorded completion timestamps. Preserve recurrence/history integrity without implementing Milestone 4 rules early. |
+| History, deletion, and recovery | Approve cancellation/deletion/account-deletion retention and cascading behavior, protected activity history, backup/restore targets, and retention consistent with private accounts. |
+| Mutation and migration boundaries | Approve atomic task/history writes, stale-edit/version checks and retry identifiers, constraints and validation, and a versioned migration/testing workflow isolated from live user data. |
+
+Keep the pending manual password-recovery verification visible while planning
+Milestone 3. It must not be represented as passed by the mocked tests or by the
+Milestone 2 commit.

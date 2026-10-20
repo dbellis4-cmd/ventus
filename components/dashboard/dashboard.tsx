@@ -4,6 +4,7 @@ import { useState, useSyncExternalStore } from "react";
 import { addDays, categoryFor, dateKey, formatDate, formatTime, sampleTasks, startOfWeek, type Task } from "@/lib/tasks/demo";
 import { Icon } from "./icon";
 import { TaskModal, type TaskDraft } from "./task-modal";
+import { LogoutButton } from "@/components/auth/logout-button";
 
 const subscribe = () => () => {};
 
@@ -92,6 +93,7 @@ function Planner() {
         <button className={`nav-item ${view === "Performance" ? "active" : ""}`} aria-current={view === "Performance" ? "page" : undefined} onClick={() => setView("Performance")}><Icon name="performance" />Performance<span className="nav-soon">Later</span></button>
         <button className={`nav-item ${view === "Settings" ? "active" : ""}`} aria-current={view === "Settings" ? "page" : undefined} onClick={() => setView("Settings")}><Icon name="settings" />Settings</button>
       </nav>
+      <LogoutButton />
     </aside>
 
     <main id="main-content" className="main-content">
