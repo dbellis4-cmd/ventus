@@ -135,32 +135,38 @@ function provider(userId, { initialized = true, failure, authError = false, maxR
     categories: ["user-a", "user-b"].map((id) => ({ ...category, id: `${id}-category`, owner_id: id })),
     tasks: records.map(({ owner, f }) => ({ ...f.task, owner_id: owner })),
     task_occurrences: records.map(({ owner, f }) => ({ ...f.occurrence, owner_id: owner })),
+    task_recurrence_revisions: [],
   };
   const client = {
     auth: { getUser: async () => ({ data: { user: userId ? { id: userId } : null }, error: authError ? { message: "PRIVATE" } : null }) },
     from(table) {
-      const q = { table, eq: [], is: [], after: null, fields: "" }; queries.push(q);
+      const q = { table, eq: [], is: [], in: null, deletedOnly: false, after: null, from: null, to: null, completedSince: null, fields: "", order: null }; queries.push(q);
       const query = {
         select(fields) { q.fields = fields; return query; },
         eq(key, value) { q.eq.push([key, value]); return query; },
+        gte(key, value) { if (key === "completed_at") q.completedSince = value; else q.from = value; return query; },
+        lte(_key, value) { q.to = value; return query; },
         is(key, value) { q.is.push([key, value]); return query; },
-        order() { return query; }, limit() { return query; },
+        in(key, values) { q.in = [key, values]; return query; },
+        not() { q.deletedOnly = true; return query; },
+        order(key, options) { q.order = [key, options?.ascending !== false]; return query; }, limit() { return query; },
         gt(_key, value) { q.after = value; return query; },
         maybeSingle() { return query.then((result) => ({ ...result, data: result.data?.[0] ?? null })); },
         then(resolve, reject) {
           if (failure === table) return Promise.resolve({ data: null, error: { message: "PRIVATE DATABASE DETAIL" } }).then(resolve, reject);
-          const data = tables[table].filter((row) => (row.owner_id ?? row.user_id) === userId && q.eq.every(([key, value]) => row[key] === value) && q.is.every(([key, value]) => row[key] === value) && (!q.after || row.id > q.after));
+          const data = tables[table].filter((row) => (row.owner_id ?? row.user_id) === userId && q.eq.every(([key, value]) => row[key] === value) && q.is.every(([key, value]) => row[key] === value) && (!q.in || q.in[1].includes(q.in[0] === "definition_snapshot->>behavior" ? row.definition_snapshot?.behavior : row[q.in[0]] ?? "once")) && (!q.deletedOnly || row.deleted_at) && (!q.after || row.id > q.after) && (!q.from || row.scheduled_date >= q.from) && (!q.to || row.scheduled_date <= q.to) && (!q.completedSince || row.completed_at >= q.completedSince));
+          if (q.order) data.sort((a, b) => String(a[q.order[0]]).localeCompare(String(b[q.order[0]])) * (q.order[1] ? 1 : -1));
           return Promise.resolve({ data: data.slice(0, maxRows), error: null }).then(resolve, reject);
         },
       };
       return query;
     },
-    rpc() { throw new Error("Reads must never initialize or mutate"); },
+    rpc(name) { assert.equal(name, "list_recurrence_candidates_page"); return Promise.resolve({ data: [], error: null }); },
   };
   return { client, queries, tables };
 }
 function reader(client) {
-  return load("lib/server/workspace.ts", { "@/lib/supabase/server": { createClient: async () => client }, "@/lib/tasks/projections": projections });
+  return load("lib/server/workspace.ts", { "@/lib/supabase/server": { createClient: async () => client }, "@/lib/tasks/projections": projections, "@/lib/tasks/dates": dates });
 }
 
 test("anonymous, revoked and mismatched users are denied before any table read", async () => {
@@ -187,7 +193,7 @@ test("owned reads, short-page pagination, repeated refresh and two-user filterin
     for (const q of p.queries) {
       assert.equal(q.eq[0][1], userId);
       assert.ok(!q.fields.includes("*"));
-      if (["tasks", "task_occurrences"].includes(q.table)) assert.equal(q.is[0][0], "deleted_at");
+      if (q.table === "tasks" || q.table === "task_occurrences" && !q.deletedOnly && !q.in) assert.equal(q.is[0][0], "deleted_at");
     }
     assert.ok(!JSON.stringify(result).includes("owner_id"));
   }
@@ -207,6 +213,10 @@ test("real Supabase SDK sends owned SELECTs and handles short pages (mock Data A
         requests++;
         const url = new URL(input);
         assert.equal(url.origin, "https://fixture.example.test");
+        if (url.pathname.includes("/rpc/list_recurrence_candidates")) {
+          assert.equal(options.method, "POST");
+          return Response.json([]);
+        }
         assert.equal(options.method, "GET");
         const table = url.pathname.split("/").at(-1);
         const ownerKey = table === "user_settings" ? "user_id" : "owner_id";
@@ -214,7 +224,13 @@ test("real Supabase SDK sends owned SELECTs and handles short pages (mock Data A
         assert.ok(!url.searchParams.get("select").includes("*"));
         const after = url.searchParams.get("id")?.slice(3);
         const fields = url.searchParams.get("select").split(",");
-        const data = p.tables[table].filter((row) => row[ownerKey] === identity && (!after || row.id > after)).slice(0, 1).map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
+        const range = url.searchParams.getAll("scheduled_date");
+        const from = range.find((part) => part.startsWith("gte."))?.slice(4);
+        const to = range.find((part) => part.startsWith("lte."))?.slice(4);
+        const deletedOnly = url.searchParams.get("deleted_at") === "not.is.null";
+        const completedSince = url.searchParams.get("completed_at")?.slice(4);
+        const status = url.searchParams.get("status")?.slice(3);
+        const data = p.tables[table].filter((row) => row[ownerKey] === identity && (!after || row.id > after) && (!from || row.scheduled_date >= from) && (!to || row.scheduled_date <= to) && (!deletedOnly || row.deleted_at) && (!completedSince || row.completed_at >= completedSince) && (!status || row.status === status)).slice(0, 1).map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
         // PostgREST singular reads permit object or array transport across SDK versions.
         return Response.json(data);
       } },
@@ -235,6 +251,216 @@ test("missing initialization shows setup without creating rows; read failures ne
   for (const table of ["user_settings", "categories", "tasks", "task_occurrences"]) {
     assert.equal(JSON.stringify(await reader(provider("user-a", { failure: table }).client).loadWorkspace("user-a")), '{"kind":"error"}');
   }
+});
+
+test("bounded week reads still show an old flexible task completed today", async () => {
+  const p = provider("user-a", { maxRows: 2 });
+  const completed = fixture("user-a-completed", { scheduled_date: "2025-01-01", status: "completed",
+    completed_at: new Date().toISOString(), definition_snapshot: behavior("flexible") });
+  p.tables.tasks.push({ ...completed.task, owner_id: "user-a" });
+  p.tables.task_occurrences.push({ ...completed.occurrence, owner_id: "user-a" });
+  const workspace = await reader(p.client).loadWorkspace("user-a");
+  assert.equal(workspace.kind, "ready");
+  assert.ok(workspace.tasks.some((task) => task.id === "user-a-completed"));
+});
+
+test("missed recurrence pages cap results at 50 and keep a stable continuation offset", async () => {
+  const before = dates.addDays(dates.dateInZone(new Date(), "America/Phoenix"), -1);
+  const p = provider("user-a", { maxRows: 100 });
+  p.tables.task_recurrence_revisions.push({ id: "rule", owner_id: "user-a",
+    effective_from: before, stopped: false, definition_snapshot: behavior("deadline"), child_templates: [] });
+  const candidates = Array.from({ length: 60 }, (_, index) => {
+    const taskId = `recurring-${String(index).padStart(3, "0")}`;
+    p.tables.tasks.push({ id: taskId, owner_id: "user-a", parent_task_id: null,
+      title: taskId, version: 1, recurrence_enabled: true, deleted_at: null });
+    return { task_id: taskId, recurrence_key: before, scheduled_date: before,
+      timezone: "America/Phoenix", start_time: null, starts_at: null,
+      end_date: null, end_time: null, ends_at: null,
+      definition_snapshot: { title: taskId, category_id: category.id,
+        category_name: category.name, behavior: "deadline" } };
+  });
+  p.client.rpc = async (name) => {
+    assert.equal(name, "list_recurrence_candidates_page");
+    return { data: candidates, error: null };
+  };
+  const read = reader(p.client);
+  const first = await read.readMissedPage(p.client, "user-a", "America/Phoenix", { before, offset: 0 });
+  assert.equal(first.tasks.length, 50);
+  assert.equal(first.cursor.offset, 50);
+  const second = await read.readMissedPage(p.client, "user-a", "America/Phoenix", first.cursor);
+  assert.equal(second.tasks.length, 10);
+  assert.equal(new Set([...first.tasks, ...second.tasks].map((task) => task.id)).size, 60);
+});
+
+test("recurrence pages and stored exceptions remain complete below a low provider row limit", async () => {
+  const key = dates.addDays(dates.dateInZone(new Date(), "America/Phoenix"), -1);
+  const p = provider("user-a", { maxRows: 2 });
+  const candidates = Array.from({ length: 125 }, (_, index) => {
+    const taskId = `series-${String(index).padStart(3, "0")}`;
+    if (index < 75) {
+      const stored = fixture(taskId, { id: `stored-${String(index).padStart(3, "0")}`,
+        recurrence_key: key, scheduled_date: dates.addDays(key, 8) });
+      p.tables.task_occurrences.push({ ...stored.occurrence, owner_id: "user-a" });
+    }
+    return { task_id: taskId, recurrence_key: key, scheduled_date: key,
+      timezone: "America/Phoenix", start_time: null, starts_at: null,
+      end_date: null, end_time: null, ends_at: null,
+      definition_snapshot: { title: taskId, category_id: category.id,
+        category_name: category.name, behavior: "deadline" } };
+  });
+  let pages = 0;
+  p.client.rpc = async (name, args) => {
+    assert.equal(name, "list_recurrence_candidates_page");
+    pages++;
+    const rows = candidates.filter((row) => !args.p_after_task_id ||
+      row.task_id > args.p_after_task_id || row.task_id === args.p_after_task_id && row.recurrence_key > args.p_after_key);
+    return { data: rows.slice(0, 100), error: null };
+  };
+  const generated = await reader(p.client).readRecurrenceCandidates(p.client, "user-a", key, key);
+  assert.equal(pages, 2);
+  assert.equal(generated.length, 50);
+  assert.equal(new Set(generated.map((row) => `${row.task_id}:${row.recurrence_key}`)).size, 50);
+  assert.ok(generated.every((row) => row.task_id >= "series-075"));
+  assert.ok(p.queries.filter((query) => query.table === "task_occurrences" && query.in).length > 2);
+});
+
+test("sparse missed history jumps across years and terminates after the last unfinished task", async () => {
+  const today = dates.dateInZone(new Date(), "America/Phoenix");
+  const oldDay = dates.addDays(today, -365 * 5);
+  const newerDay = dates.addDays(today, -365 * 2);
+  const p = provider("user-a", { maxRows: 2 });
+  const old = fixture("old-deadline", { scheduled_date: oldDay,
+    definition_snapshot: { ...behavior("deadline"), title: "Old deadline" } });
+  const newer = fixture("newer-deadline", { scheduled_date: newerDay,
+    definition_snapshot: behavior("deadline") });
+  p.tables.tasks.push({ ...old.task, owner_id: "user-a" }, { ...newer.task, owner_id: "user-a" });
+  p.tables.task_occurrences.push({ ...old.occurrence, owner_id: "user-a" }, { ...newer.occurrence, owner_id: "user-a" });
+  const read = reader(p.client);
+  const result = await read.readMissedPage(p.client, "user-a", "America/Phoenix",
+    { before: dates.addDays(today, -1), offset: 0 });
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].id, "newer-deadline");
+  assert.ok(result.cursor);
+  const second = await read.readMissedPage(p.client, "user-a", "America/Phoenix", result.cursor);
+  assert.equal(second.tasks.map((task) => task.id).join(), "old-deadline");
+  assert.equal(second.cursor, null);
+  assert.equal(new Set(p.queries.filter((query) => query.table === "task_occurrences" && query.from)
+    .map((query) => query.from)).size, 2);
+});
+
+test("years-old completed and fixed tasks do not offer backlog pagination", async () => {
+  const today = dates.dateInZone(new Date(), "America/Phoenix");
+  const p = provider("user-a", { maxRows: 2 });
+  const completed = fixture("completed", { scheduled_date: dates.addDays(today, -365 * 6),
+    status: "completed", completed_at: "2020-01-01T00:00:00Z", definition_snapshot: behavior("deadline") });
+  p.tables.tasks.push({ ...completed.task, owner_id: "user-a" });
+  p.tables.task_occurrences.push({ ...completed.occurrence, owner_id: "user-a" });
+  const result = await reader(p.client).readMissedPage(p.client, "user-a", "America/Phoenix",
+    { before: dates.addDays(today, -1), offset: 0 });
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.cursor, null);
+  assert.equal(p.queries.filter((query) => query.table === "task_occurrences" && query.from).length, 0);
+});
+
+test("a stopped series keeps its missed virtual occurrence reachable across sparse pages", async () => {
+  const today = dates.dateInZone(new Date(), "America/Phoenix");
+  const missed = dates.addDays(today, -120);
+  const stop = dates.addDays(today, -60);
+  const p = provider("user-a", { maxRows: 2 });
+  p.tables.tasks.push({ id: "series", owner_id: "user-a", parent_task_id: null,
+    title: "Series", version: 2, recurrence_enabled: true, deleted_at: null });
+  p.tables.task_recurrence_revisions.push(
+    { id: "rule", task_id: "series", owner_id: "user-a", effective_from: missed,
+      stopped: false, definition_snapshot: behavior("deadline"), child_templates: [] },
+    { id: "stop", task_id: "series", owner_id: "user-a", effective_from: stop,
+      stopped: true, definition_snapshot: behavior("deadline") },
+  );
+  let rpcCalls = 0;
+  p.client.rpc = async (_name, args) => {
+    rpcCalls++;
+    return { data: args.p_from <= missed && missed <= args.p_to ? [{
+      task_id: "series", recurrence_key: missed, scheduled_date: missed,
+      timezone: "America/Phoenix", start_time: null, starts_at: null,
+      end_date: null, end_time: null, ends_at: null,
+      definition_snapshot: behavior("deadline"),
+    }] : [], error: null };
+  };
+  const read = reader(p.client);
+  let cursor = { before: dates.addDays(today, -1), offset: 0 };
+  const seen = [];
+  for (let request = 0; request < 4 && cursor; request++) {
+    const calls = rpcCalls;
+    const result = await read.readMissedPage(p.client, "user-a", "America/Phoenix", cursor);
+    assert.ok(rpcCalls - calls <= 8, "one request scans at most eight weeks");
+    seen.push(...result.tasks.map((task) => `${task.id}:${task.recurrenceKey}`));
+    cursor = result.cursor;
+  }
+  assert.equal(seen.join(), `series:${missed}`);
+  assert.equal(cursor, null);
+});
+
+test("a fixed recurring parent does not hide an overdue virtual child", async () => {
+  const today = dates.dateInZone(new Date(), "America/Phoenix");
+  const missed = dates.addDays(today, -10);
+  const parentStart = dates.addDays(today, -3);
+  const p = provider("user-a", { maxRows: 2 });
+  p.tables.tasks.push(
+    { id: "fixed-series", owner_id: "user-a", parent_task_id: null,
+      title: "Fixed parent", version: 1, recurrence_enabled: true, deleted_at: null },
+    { id: "deadline-child", owner_id: "user-a", parent_task_id: "fixed-series",
+      title: "Deadline child", version: 1, recurrence_enabled: true, deleted_at: null },
+  );
+  p.tables.task_recurrence_revisions.push({ id: "fixed-rule", task_id: "fixed-series",
+    owner_id: "user-a", effective_from: parentStart, stopped: false,
+    definition_snapshot: behavior("fixed"), child_templates: [{ day_offset: -7, snapshot: behavior("deadline") }] });
+  p.client.rpc = async (_name, args) => ({ data: args.p_from <= missed && missed <= args.p_to ? [{
+    task_id: "deadline-child", recurrence_key: missed, scheduled_date: missed,
+    timezone: "America/Phoenix", start_time: null, starts_at: null,
+    end_date: null, end_time: null, ends_at: null,
+    definition_snapshot: behavior("deadline"),
+  }] : [], error: null });
+  const result = await reader(p.client).readMissedPage(p.client, "user-a", "America/Phoenix",
+    { before: dates.addDays(today, -1), offset: 0 });
+  assert.equal(result.tasks.map((task) => task.id).join(), "deadline-child");
+  assert.equal(result.cursor, null);
+});
+
+test("stopping a series hides postponed open exceptions while retaining closed history", async () => {
+  const p = provider("user-a", { maxRows: 10 });
+  const root = "stopped-series";
+  p.tables.tasks.push({ id: root, owner_id: "user-a", parent_task_id: null,
+    title: "Stopped", version: 4, recurrence_enabled: true, deleted_at: null });
+  const open = fixture(root, { id: "open-instance", recurrence_key: "2026-10-21",
+    scheduled_date: "2026-10-23", status: "open" }).occurrence;
+  const closed = fixture(root, { id: "closed-instance", recurrence_key: "2026-10-20",
+    scheduled_date: "2026-10-23", status: "completed", completed_at: now.toISOString() }).occurrence;
+  p.tables.task_occurrences.push({ ...open, owner_id: "user-a" }, { ...closed, owner_id: "user-a" });
+  p.tables.task_recurrence_revisions.push({ id: "stop", task_id: root, owner_id: "user-a",
+    effective_from: "2026-10-22", stopped: true });
+  const result = await reader(p.client).loadWorkspace("user-a", "2026-10-23");
+  assert.equal(result.kind, "ready");
+  assert.equal(result.tasks.filter((task) => task.id === root).length, 1);
+  assert.equal(result.tasks.find((task) => task.id === root).status, "completed");
+});
+
+test("deleting a recurring parent occurrence hides its open stored child exception", async () => {
+  const p = provider("user-a", { maxRows: 10 });
+  const root = "deleted-parent";
+  const child = "stored-child";
+  p.tables.tasks.push(
+    { id: root, owner_id: "user-a", parent_task_id: null, title: "Parent", version: 2,
+      recurrence_enabled: true, deleted_at: null },
+    { id: child, owner_id: "user-a", parent_task_id: root, title: "Child", version: 1,
+      recurrence_enabled: true, deleted_at: null },
+  );
+  const deleted = fixture(root, { id: "parent-tombstone", recurrence_key: "2026-10-20",
+    scheduled_date: "2026-10-25", deleted_at: now.toISOString() }).occurrence;
+  const active = fixture(child, { id: "child-exception", recurrence_key: "2026-10-20",
+    scheduled_date: "2026-10-22" }).occurrence;
+  p.tables.task_occurrences.push({ ...deleted, owner_id: "user-a" }, { ...active, owner_id: "user-a" });
+  const result = await reader(p.client).loadWorkspace("user-a", "2026-10-22");
+  assert.equal(result.kind, "ready");
+  assert.equal(result.tasks.some((task) => task.id === child), false);
 });
 
 function setupAction({ identity = "user-a", origin = "https://ventus.example.test", host = "ventus.example.test", originCheck = deployedOrigin, fail = false } = {}) {
@@ -303,6 +529,12 @@ function render(workspace) {
   return renderToStaticMarkup(React.createElement(Dashboard, { workspace }));
 }
 
+function section(text, id) {
+  const start = text.indexOf(`id="${id}-heading"`);
+  assert.ok(start >= 0, `${id} section exists`);
+  return text.slice(start, text.indexOf("</section>", start));
+}
+
 test("rendered Dashboard preserves empty/error/setup states and enables lifecycle controls", () => {
   const empty = render(project([]));
   assert.match(empty, /No scheduled tasks for this day/);
@@ -332,6 +564,30 @@ test("overdue tasks render once on Today with original date, parents and escaped
   assert.equal((text.match(/class="task-row open"/g) ?? []).length, 1);
 });
 
+test("an overdue subtask remains visible when its same-date parent is not in Today's sections", () => {
+  const parent = fixture("parent", { scheduled_date: "2026-10-18" });
+  const child = fixture("child", { scheduled_date: "2026-10-18", definition_snapshot: { ...behavior("deadline"), title: "Task child" } });
+  child.task.parent_task_id = "parent";
+  const text = render(project([parent, child]));
+  assert.match(text, /class="overdue-panel"/);
+  assert.match(text, /Task child<\/button>/);
+  assert.match(text, /Subtask of Task parent/);
+  assert.ok(!text.includes("Task parent</button>"));
+  assert.equal((text.match(/title="Edit task">Task child<\/button>/g) ?? []).length, 1);
+});
+
+test("an overdue parent brings its same-date child into the same section and day count", () => {
+  const parent = fixture("parent", { scheduled_date: "2026-10-18",
+    definition_snapshot: { ...behavior("deadline"), title: "Task parent" } });
+  const child = fixture("child", { scheduled_date: "2026-10-18" });
+  child.task.parent_task_id = "parent";
+  const text = render(project([child, parent]));
+  const overdue = text.slice(text.indexOf('class="overdue-list"'), text.indexOf("</ul>", text.indexOf('class="overdue-list"')));
+  assert.ok(overdue.indexOf("Task parent</button>") < overdue.indexOf("Task child</button>"));
+  assert.match(text, /Monday, October 19, 2 tasks, today/);
+  assert.equal((text.match(/title="Edit task">Task child<\/button>/g) ?? []).length, 1);
+});
+
 test("day/week selections produce the appropriate task sections and chronological rows", () => {
   const morning = fixture("morning", { start_time: "08:00", starts_at: "2026-10-19T15:00:00Z" });
   const afternoon = fixture("afternoon", { start_time: "14:00", starts_at: "2026-10-19T21:00:00Z" });
@@ -347,4 +603,78 @@ test("day/week selections produce the appropriate task sections and chronologica
   const week = render(project(fixtures, "2026-10-26"));
   assert.match(week, />Task next-week<\/button>/);
   assert.match(week, /Sunday, October 25/);
+});
+
+test("Dashboard keeps chronological parent groups with indented subtasks directly below their parent", () => {
+  const early = fixture("early", { start_time: "08:00", starts_at: "2026-10-19T15:00:00Z" });
+  const parent = fixture("parent", { start_time: "09:00", starts_at: "2026-10-19T16:00:00Z" });
+  const child = fixture("child", { start_time: "09:00", starts_at: "2026-10-19T16:00:00Z" });
+  child.task.parent_task_id = "parent";
+  const other = fixture("other", { start_time: "10:00", starts_at: "2026-10-19T17:00:00Z" });
+  const text = render(project([child, other, parent, early]));
+  const titles = [...text.matchAll(/title="Edit task">Task (early|parent|child|other)<\/button>/g)].map((match) => match[1]);
+  assert.deepEqual(titles, ["early", "parent", "child", "other"]);
+  assert.match(text, /class="task-row open" data-subtask=""[^>]*>[\s\S]*?Task child/);
+  assert.equal((text.match(/data-subtask=""/g) ?? []).length, 1);
+  assert.match(text, /Subtask of Task parent/);
+  assert.equal((text.match(/type="checkbox"/g) ?? []).length, 4);
+});
+
+test("untimed subtasks follow a timed parent's Scheduled section without losing their own time", () => {
+  const parent = fixture("parent", { start_time: "06:00", starts_at: "2026-10-19T13:00:00Z" });
+  const child = fixture("child");
+  child.task.parent_task_id = "parent";
+  const later = fixture("later", { start_time: "07:00", starts_at: "2026-10-19T14:00:00Z" });
+  const workspace = project([child, later, fixture("independent"), parent]);
+  workspace.backlog = [workspace.tasks.find((task) => task.id === "child")];
+  const text = render(workspace);
+  const scheduled = section(text, "scheduled");
+  const anytime = section(text, "anytime");
+  assert.deepEqual([...scheduled.matchAll(/title="Edit task">Task (parent|child|later)<\/button>/g)].map((match) => match[1]),
+    ["parent", "child", "later"]);
+  assert.match(scheduled, /data-subtask=""[^>]*>[\s\S]*?class="anytime-dash"[^>]*>—[\s\S]*?Task child/);
+  assert.deepEqual([...anytime.matchAll(/title="Edit task">Task ([^<]+)<\/button>/g)].map((match) => match[1]), ["independent"]);
+  assert.equal((text.match(/title="Edit task">Task child<\/button>/g) ?? []).length, 1);
+});
+
+test("Dashboard groups recurring children with their matching parent occurrence", () => {
+  const parent = (key, label, time) => {
+    const item = fixture("parent", { id: `parent-${key}`, recurrence_key: key, start_time: time,
+      definition_snapshot: { ...behavior("fixed"), title: `Parent ${label}` } });
+    item.task.recurrence_enabled = true;
+    return item;
+  };
+  const child = (key, label) => {
+    const item = fixture("child", { id: `child-${key}`, recurrence_key: key,
+      definition_snapshot: { ...behavior("fixed"), title: `Child ${label}` } });
+    item.task.parent_task_id = "parent";
+    item.task.recurrence_enabled = true;
+    return item;
+  };
+  const text = render(project([child("2026-10-18", "first"), parent("2026-10-18", "first", "06:00"),
+    child("2026-10-19", "second"), parent("2026-10-19", "second", "07:00")]));
+  const titles = [...section(text, "scheduled").matchAll(/title="Edit task">(Parent|Child) (first|second)<\/button>/g)]
+    .map((match) => `${match[1]} ${match[2]}`);
+  assert.deepEqual(titles, ["Parent first", "Child first", "Parent second", "Child second"]);
+  assert.ok(!section(text, "anytime").includes("Child first"));
+  assert.equal((text.match(/title="Edit task">Child (first|second)<\/button>/g) ?? []).length, 2);
+});
+
+test("cross-date subtasks stay on their own date and section with a parent reference", () => {
+  const parent = fixture("parent", { start_time: "06:00", starts_at: "2026-10-19T13:00:00Z" });
+  const untimed = fixture("untimed", { scheduled_date: "2026-10-20" });
+  untimed.task.parent_task_id = "parent";
+  const timed = fixture("timed", { scheduled_date: "2026-10-20", start_time: "08:00", starts_at: "2026-10-20T15:00:00Z" });
+  timed.task.parent_task_id = "parent";
+  const fixtures = [untimed, parent, timed];
+  const firstDay = render(project(fixtures));
+  assert.match(section(firstDay, "scheduled"), /Task parent<\/button>/);
+  assert.ok(!firstDay.includes("Task untimed</button>"));
+  assert.ok(!firstDay.includes("Task timed</button>"));
+  const nextDay = render(project(fixtures, "2026-10-20"));
+  assert.match(section(nextDay, "scheduled"), /Task timed<\/button>/);
+  assert.match(section(nextDay, "anytime"), /Task untimed<\/button>/);
+  assert.ok(!nextDay.includes("Task parent</button>"));
+  assert.equal((nextDay.match(/Subtask of Task parent/g) ?? []).length, 2);
+  assert.equal((nextDay.match(/title="Edit task">Task (untimed|timed)<\/button>/g) ?? []).length, 2);
 });

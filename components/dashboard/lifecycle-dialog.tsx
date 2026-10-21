@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { changeTaskLifecycle } from "@/app/task-actions";
-import { addDays, validDate } from "@/lib/tasks/dates";
+import { addDays, dateInZone, validDate } from "@/lib/tasks/dates";
 import type { LifecycleCommand, TaskEditor, TaskFailure } from "@/lib/tasks/editor";
 import { InstantChoice } from "./task-modal";
 
@@ -23,6 +23,9 @@ export function LifecycleDialog({ editor, mode, onSaved, onClose }: {
   const [startInstant, setStartInstant] = useState(task.startsAt);
   const [endInstant, setEndInstant] = useState(task.endsAt);
   const [reason, setReason] = useState("");
+  const [deleteScope, setDeleteScope] = useState<"occurrence" | "future_series">("occurrence");
+  const canChangeSeries = !!editor.recurrenceKey && editor.recurrenceKey !== "once" &&
+    editor.recurrenceKey >= dateInZone(new Date(), task.timezone);
   const locked = pending || error?.code === "conflict" || error?.code === "uncertain";
   const descendants = editor.nodes.filter((node) => {
     let parent = node.parentId;
@@ -45,10 +48,12 @@ export function LifecycleDialog({ editor, mode, onSaved, onClose }: {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (inFlight.current || locked) return;
-    const base = { taskId: task.id, rootVersion: editor.rootVersion!, taskVersion: task.taskVersion, occurrenceVersion: task.occurrenceVersion };
+    const base = { taskId: task.id, rootVersion: editor.rootVersion!, taskVersion: task.taskVersion, occurrenceVersion: task.occurrenceVersion,
+      ...(editor.recurrenceKey ? { recurrenceKey: editor.recurrenceKey } : {}) };
     const command: LifecycleCommand = mode === "postpone"
-      ? { ...base, kind: "postpone", date, time, endDate: endTime ? endDate : "", endTime, startInstant, endInstant }
-      : mode === "cancel" ? { ...base, kind: "cancel", reason } : { ...base, kind: "delete" };
+      ? { ...base, kind: "postpone", date, time, endDate: endTime ? endDate : "", endTime, startInstant, endInstant,
+          ...(editor.recurrenceKey ? { timezone: task.timezone } : {}) }
+      : mode === "cancel" ? { ...base, kind: "cancel", reason } : { ...base, kind: "delete", scope: deleteScope };
     inFlight.current = true; setPending(true);
     try {
       const result = await changeTaskLifecycle(command);
@@ -79,10 +84,14 @@ export function LifecycleDialog({ editor, mode, onSaved, onClose }: {
           {endTime && <label className="field">End date<input type="date" required disabled={locked} value={endDate} onChange={(event) => { setEndDate(event.target.value); setEndInstant(""); }} /></label>}
           <InstantChoice date={date} time={time} timezone={task.timezone} value={startInstant} label="Start time offset" disabled={locked} onChange={setStartInstant} />
           <InstantChoice date={endDate || date} time={endTime} timezone={task.timezone} value={endInstant} label="End time offset" disabled={locked} onChange={setEndInstant} />
-          <p className="field-help">Times use {task.timezone}. This changes the current schedule and preserves the original date in history.</p>
+          <p className="field-help">Times use {task.timezone}. This changes the current schedule and preserves the original date in history.{!task.parentId && " Open subtasks move by the same number of days."}{editor.recurrenceKey && " This affects only this occurrence."}</p>
         </>}
         {mode === "cancel" && <><p className="field-help">Canceling keeps this task in history and does not cancel its subtasks.</p><label className="field">Reason (optional)<input maxLength={500} disabled={locked} value={reason} onChange={(event) => setReason(event.target.value)} /></label></>}
-        {mode === "delete" && <p className="field-help">This removes the task from active views{descendants.length ? ` and also deletes ${descendants.length} ${descendants.length === 1 ? "subtask" : "subtasks"}${canceledDescendants ? ` (${descendants.length - canceledDescendants} active, ${canceledDescendants} already canceled)` : ""}` : ""}. Its history is preserved. This cannot be undone here.</p>}
+        {mode === "delete" && <><p className="field-help">This removes the task from active views{descendants.length ? ` and also deletes ${descendants.length} ${descendants.length === 1 ? "subtask" : "subtasks"}${canceledDescendants ? ` (${descendants.length - canceledDescendants} active, ${canceledDescendants} already canceled)` : ""}` : ""}. Its history is preserved. This cannot be undone here.</p>
+          {editor.recurrenceKey && !task.parentId && <fieldset className="field"><legend>Delete</legend>
+            <label><input type="radio" name="delete-scope" checked={deleteScope === "occurrence"} disabled={locked} onChange={() => setDeleteScope("occurrence")} /> This occurrence</label>
+            <label><input type="radio" name="delete-scope" checked={deleteScope === "future_series"} disabled={locked || !canChangeSeries} onChange={() => setDeleteScope("future_series")} /> This and future occurrences</label>
+          </fieldset>}</>}
         {error && <p role="alert" className="form-error">{error.message}</p>}
       </div>
       <footer className="modal-footer"><div className="modal-actions"><button type="button" className="button secondary" disabled={pending} onClick={onClose}>Back</button><button type="submit" className={`button ${mode === "postpone" ? "primary" : "danger"}`} disabled={locked}>{pending ? "Saving…" : mode === "postpone" ? "Postpone" : mode === "cancel" ? "Confirm cancellation" : "Delete task"}</button></div></footer>

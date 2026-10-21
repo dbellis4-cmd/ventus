@@ -5,10 +5,12 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { isValidActionOrigin } from "@/lib/auth/site-url";
 import { buildTaskWrite, readTaskEditor } from "@/lib/server/task-editor";
+import { readMissedPage, readSettings } from "@/lib/server/workspace";
 import { TaskInputError, type EditorResult, type LifecycleResult, type SaveResult, type TaskFailure } from "@/lib/tasks/editor";
 import { validId, validateLifecycleCommand, validateSaveCommand } from "@/lib/tasks/validation";
-import { dateInZone } from "@/lib/tasks/dates";
+import { dateInZone, validDate } from "@/lib/tasks/dates";
 import { makeSchedule } from "@/lib/tasks/schedules";
+import type { BacklogCursor, ReadTask } from "@/lib/tasks/projections";
 
 async function authorize() {
   const requestHeaders = await headers();
@@ -30,11 +32,31 @@ function failure(error: unknown, attemptedWrite = false): TaskFailure {
     : { ok: false, code: "unavailable", message: "Task storage is temporarily unavailable. Your draft is kept. Please try again." };
 }
 
-export async function getTaskEditor(taskId: unknown = null): Promise<EditorResult> {
+export async function getTaskEditor(taskId: unknown = null, recurrenceKey?: unknown): Promise<EditorResult> {
   try {
     if (taskId !== null && !validId(taskId)) throw new TaskInputError("Invalid task reference.");
+    if (recurrenceKey !== undefined && !(recurrenceKey === "once" || validDate(recurrenceKey))) throw new TaskInputError("Invalid occurrence reference.");
     const { client, userId } = await authorize();
-    return { ok: true, editor: await readTaskEditor(client, userId, taskId) };
+    return { ok: true, editor: await readTaskEditor(client, userId, taskId, recurrenceKey as string | undefined) };
+  } catch (error) { return failure(error); }
+}
+
+export async function getMissedPage(cursor: unknown): Promise<
+  { ok: true; tasks: ReadTask[]; cursor: BacklogCursor | null } | TaskFailure> {
+  try {
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
+        Object.keys(cursor).sort().join(",") !== "before,offset") throw new TaskInputError("Invalid backlog page.");
+    const page = cursor as BacklogCursor;
+    if (!validDate(page.before) || page.before < "0002-01-07" || page.before > "9998-12-31" ||
+        !Number.isSafeInteger(page.offset) || page.offset < 0) {
+      throw new TaskInputError("Invalid backlog page.");
+    }
+    const { client, userId } = await authorize();
+    const settings = await readSettings(client, userId);
+    if (!settings?.defaults_initialized_at) throw new TaskInputError("Workspace unavailable.", "unavailable");
+    const today = dateInZone(new Date(), settings.timezone);
+    if (page.before >= today) throw new TaskInputError("Backlog page must precede Today.");
+    return { ok: true, ...await readMissedPage(client, userId, settings.timezone, page) };
   } catch (error) { return failure(error); }
 }
 
@@ -44,7 +66,8 @@ export async function saveTask(input: unknown): Promise<SaveResult> {
   try {
     const command = validateSaveCommand(input);
     const { client, userId } = await authorize();
-    const editor = await readTaskEditor(client, userId, command.kind === "edit" ? command.taskId : null);
+    const editor = await readTaskEditor(client, userId, command.kind === "edit" ? command.taskId : null,
+      command.kind === "edit" ? command.recurrenceKey : undefined);
     const write = buildTaskWrite(command, editor);
     let taskId = command.kind === "edit" ? command.taskId : "";
     if (write.changed) {
@@ -53,7 +76,7 @@ export async function saveTask(input: unknown): Promise<SaveResult> {
       attemptedWrite = true;
       const { data, error } = await client.rpc(write.rpc, write.args);
       if (error) throw error;
-      if (write.rpc === "create_task") {
+      if (write.rpc === "create_task" || write.rpc === "create_recurring_task") {
         if (!validId(data?.task_id)) return failure(null, true);
         taskId = data.task_id;
       }
@@ -74,6 +97,40 @@ export async function changeTaskLifecycle(input: unknown): Promise<LifecycleResu
   try {
     const command = validateLifecycleCommand(input);
     const { client, userId } = await authorize();
+    if (command.recurrenceKey) {
+      const accountZone = command.kind === "postpone" ? null : (await readSettings(client, userId))?.timezone;
+      let error: { code?: string } | null = null;
+      if (command.kind === "delete" && command.scope === "future_series") {
+        let from = command.recurrenceKey;
+        if (from === "once") {
+          const first = await client.from("task_recurrence_revisions").select("effective_from")
+            .eq("owner_id", userId).eq("task_id", command.taskId).order("revision").limit(1).maybeSingle();
+          if (first.error || !first.data) throw first.error ?? new TaskInputError("Series unavailable.", "unavailable");
+          from = first.data.effective_from;
+        }
+        attemptedWrite = true;
+        ({ error } = await client.rpc("change_recurring_series", {
+          p_task_id: command.taskId, p_expected_series_version: command.rootVersion,
+          p_from_date: from, p_stop: true,
+        }));
+      } else {
+        const schedule = command.kind === "postpone"
+          ? makeSchedule(command.date, command.time, command.endTime, command.timezone || "", command.startInstant,
+              command.endInstant, command.endDate || command.date) : null;
+        attemptedWrite = true;
+        ({ error } = await client.rpc("mutate_recurring_occurrence", {
+          p_task_id: command.taskId, p_recurrence_key: command.recurrenceKey,
+          p_expected_series_version: command.rootVersion,
+          p_expected_occurrence_version: command.occurrenceVersion,
+          p_action: command.kind === "completion" ? command.completed ? "complete" : "reopen" : command.kind,
+          p_schedule: schedule, p_reason: command.kind === "cancel" ? command.reason || null : null,
+        }));
+      }
+      if (error) throw error;
+      result = { ok: true, date: command.kind === "postpone" ? command.date : dateInZone(new Date(), accountZone || "UTC") };
+      try { revalidatePath("/"); } catch { result.refreshFailed = true; }
+      return result;
+    }
     const editor = await readTaskEditor(client, userId, command.taskId);
     const target = editor.nodes.find((node) => node.id === command.taskId);
     if (!target) throw new TaskInputError("Task unavailable. Refresh and try again.", "unavailable");

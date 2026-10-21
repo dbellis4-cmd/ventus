@@ -35,7 +35,8 @@ function context() {
 }
 const serviceMocks = {
   "@/lib/server/workspace": {},
-  "@/lib/tasks/editor": editorTypes, "@/lib/tasks/schedules": schedules, "@/lib/tasks/validation": validation,
+  "@/lib/tasks/editor": editorTypes, "@/lib/tasks/schedules": schedules,
+  "@/lib/tasks/dates": dates, "@/lib/tasks/validation": validation,
 };
 const service = load("lib/server/task-editor.ts", serviceMocks);
 const clean = value => JSON.parse(JSON.stringify(value));
@@ -162,6 +163,73 @@ test("unchanged overnight schedules and archived categories remain intact; sched
   assert.throws(() => service.buildTaskWrite(command, editor), /Overnight/);
 });
 
+test("recurrence creates a series and routes virtual occurrence versus future series edits to distinct RPCs", () => {
+  const create = createCommand();
+  create.draft.recurrence = { frequency: "weekdays", weekdays: [1, 3], endDate: "", foldSide: "earlier" };
+  const planned = service.buildTaskWrite(create, { taskId: null, rootId: null, rootVersion: null,
+    timezone: "America/Phoenix", categories: [category], nodes: [] });
+  assert.equal(planned.rpc, "create_recurring_task");
+  assert.equal(planned.args.p_rule.frequency, "weekdays");
+
+  const editor = { ...context(), recurrenceKey: "2026-10-21",
+    seriesRule: { frequency: "daily", weekdays: [], endDate: "", foldSide: "earlier" },
+    nodes: [node(1)] };
+  editor.nodes[0].occurrenceVersion = 0;
+  editor.nodes[0].date = "2026-10-21";
+  const occurrence = editCommand(editor);
+  occurrence.recurrenceKey = editor.recurrenceKey;
+  occurrence.scope = "occurrence";
+  occurrence.draft.title = "Only Wednesday";
+  assert.equal(validation.validateSaveCommand(occurrence).occurrenceVersion, 0);
+  const one = service.buildTaskWrite(occurrence, editor);
+  assert.equal(one.rpc, "mutate_recurring_occurrence");
+  assert.equal(one.args.p_recurrence_key, "2026-10-21");
+  occurrence.scope = "series";
+  const future = service.buildTaskWrite(occurrence, editor);
+  assert.equal(future.rpc, "change_recurring_series");
+  assert.equal(future.args.p_from_date, "2026-10-21");
+
+  const child = node(2, id(1));
+  child.occurrenceVersion = 0;
+  child.date = "2026-10-22";
+  const childEditor = { ...editor, taskId: id(2), nodes: [editor.nodes[0], child] };
+  const childCommand = editCommand(childEditor);
+  childCommand.recurrenceKey = "2026-10-21";
+  childCommand.scope = "series";
+  childCommand.draft.title = "Future child title";
+  const childWrite = service.buildTaskWrite(childCommand, childEditor);
+  assert.equal(childWrite.rpc, "change_recurring_child_series");
+  assert.equal(childWrite.args.p_from_date, "2026-10-21");
+});
+
+test("parent date edits use atomic tree and occurrence RPCs with the original child references", () => {
+  const once = context();
+  const onceCommand = editCommand(once);
+  onceCommand.draft.date = "2026-10-23";
+  const onceWrite = service.buildTaskWrite(validation.validateSaveCommand(onceCommand), once);
+  assert.equal(onceWrite.rpc, "edit_task_tree");
+  assert.equal(onceWrite.args.p_edits.length, 1);
+  assert.equal(onceWrite.args.p_edits[0].patch.schedule.date, "2026-10-23");
+  assert.equal(onceWrite.args.p_new_subtasks.length, 0);
+
+  const recurring = { ...context(), recurrenceKey: "2026-10-21",
+    seriesRule: { frequency: "daily", weekdays: [], endDate: "", foldSide: "earlier" },
+    nodes: [node(1), node(2, id(1))] };
+  recurring.nodes[0].date = "2026-10-21";
+  recurring.nodes[1].date = "2026-10-22";
+  recurring.nodes[0].occurrenceVersion = 0;
+  recurring.nodes[1].occurrenceVersion = 0;
+  const recurringCommand = editCommand(recurring);
+  recurringCommand.recurrenceKey = recurring.recurrenceKey;
+  recurringCommand.scope = "occurrence";
+  recurringCommand.draft.date = "2026-10-24";
+  const recurringWrite = service.buildTaskWrite(validation.validateSaveCommand(recurringCommand), recurring);
+  assert.equal(recurringWrite.rpc, "mutate_recurring_occurrence");
+  assert.equal(recurringWrite.args.p_action, "edit");
+  assert.equal(recurringWrite.args.p_schedule.date, "2026-10-24");
+  assert.equal(recurringWrite.args.p_recurrence_key, "2026-10-21");
+});
+
 test("complete hierarchy reads include off-week parents, siblings and grandchildren, and detect inconsistent snapshots", async () => {
   const editor = context(); editor.nodes[2].date = "2027-01-01";
   const reads = [];
@@ -200,6 +268,7 @@ function actions({ identity = "verified-user", origin = "https://ventus.example.
       buildTaskWrite: service.buildTaskWrite,
       readTaskEditor: async (_client, userId, taskId) => { assert.equal(userId, identity); if (taskId && taskId !== editor.taskId) throw new editorTypes.TaskInputError("Task or category unavailable.", "unavailable"); return taskId ? editor : { ...editor, nodes: [], taskId: null, rootId: null, rootVersion: null }; },
     },
+    "@/lib/server/workspace": { readSettings: async () => ({ timezone: "America/Phoenix" }) },
     "@/lib/tasks/editor": editorTypes, "@/lib/tasks/validation": validation, "@/lib/tasks/dates": dates, "@/lib/tasks/schedules": schedules,
   });
   return { ...taskActions, calls, get initializedClient() { return initializedClient; } };
@@ -388,6 +457,7 @@ function renderModal(editor, onDelete) {
   const { TaskModal } = load("components/dashboard/task-modal.tsx", {
     "@/app/task-actions": { getTaskEditor() { throw new Error("No read during render"); }, saveTask() { throw new Error("No write during render"); } },
     "@/lib/tasks/editor": editorTypes, "@/lib/tasks/schedules": schedules, "@/lib/tasks/validation": validation,
+    "@/lib/tasks/dates": dates,
     "./icon": { Icon: () => null },
   });
   return renderToStaticMarkup(React.createElement(TaskModal, { editor, date: "2026-10-20", onSaved() {}, onClose() {}, onDelete }));

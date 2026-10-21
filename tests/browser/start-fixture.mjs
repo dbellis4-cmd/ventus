@@ -14,6 +14,8 @@ const categories = [
 let tasks;
 let occurrences;
 let activity;
+let revisions;
+let candidateReads;
 function reset() {
   tasks = [
     { id: uuid(1), parent_task_id: null, title: "Research Paper", category_id: uuid(90), location: null, calendar_opt_in: true, behavior_override: null, version: 3, deleted_at: null },
@@ -28,6 +30,8 @@ function reset() {
     definition_snapshot: { title: task.title, category_id: task.category_id, category_name: "Assignments", behavior: "deadline" },
   }));
   activity = [];
+  revisions = [];
+  candidateReads = 0;
 }
 reset();
 
@@ -39,28 +43,69 @@ function error(res, status, code, message) { send(res, status, { code, message }
 function authorized(req) { return req.headers.authorization === `Bearer ${accessToken}`; }
 function rows(table) {
   return table === "user_settings" ? [{ user_id: user.id, timezone: "America/Phoenix", defaults_initialized_at: "2026-10-20T00:00:00Z" }]
-    : table === "categories" ? categories : table === "tasks" ? tasks : table === "task_occurrences" ? occurrences : [];
+    : table === "categories" ? categories : table === "tasks" ? tasks : table === "task_occurrences" ? occurrences
+      : table === "task_recurrence_revisions" ? revisions : [];
 }
 const api = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://127.0.0.1:${apiPort}`);
     if (url.pathname === "/__reset") { reset(); return send(res, 200, { ok: true }); }
-    if (url.pathname === "/__state") return send(res, 200, { tasks, occurrences, activity });
+    if (url.pathname === "/__sparse-backlog") {
+      revisions = [{ id: uuid(50), task_id: tasks[0].id, owner_id: user.id,
+        effective_from: "2021-01-01", stopped: false,
+        definition_snapshot: { behavior: "deadline" }, child_templates: [] }];
+      candidateReads = 0;
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === "/__state") return send(res, 200, { tasks, occurrences, activity, candidateReads });
     if (url.pathname === "/auth/v1/token" && req.method === "POST") return send(res, 200, { access_token: accessToken, refresh_token: "fixture-refresh", token_type: "bearer", expires_in: 3600, user });
     if (url.pathname === "/auth/v1/user") return authorized(req) ? send(res, 200, user) : error(res, 403, "session_not_found", "Fixture session unavailable");
     if (url.pathname === "/auth/v1/logout") return send(res, 200, {});
     if (!authorized(req)) return error(res, 401, "42501", "Fixture authorization required");
     if (url.pathname.startsWith("/rest/v1/") && req.method === "GET") {
       const table = url.pathname.split("/")[3];
-      let data = rows(table).filter(row => !url.searchParams.has("deleted_at") || row.deleted_at === null);
+      let data = rows(table).filter(row => {
+        const deleted = url.searchParams.get("deleted_at");
+        return deleted === "is.null" ? row.deleted_at === null : deleted === "not.is.null" ? !!row.deleted_at : true;
+      });
       for (const key of ["id", "user_id", "owner_id"]) {
         const filter = url.searchParams.get(key);
         if (filter && key !== "owner_id") data = data.filter(row => row[key] === filter.slice(3));
       }
       const after = url.searchParams.get("id");
       if (after?.startsWith("gt.")) data = data.filter(row => row.id > after.slice(3));
+      for (const range of url.searchParams.getAll("scheduled_date")) {
+        if (range.startsWith("gte.")) data = data.filter(row => row.scheduled_date >= range.slice(4));
+        if (range.startsWith("lte.")) data = data.filter(row => row.scheduled_date <= range.slice(4));
+      }
+      const completedSince = url.searchParams.get("completed_at")?.slice(4);
+      if (completedSince) data = data.filter(row => row.completed_at >= completedSince);
+      const status = url.searchParams.get("status")?.slice(3);
+      if (status) data = data.filter(row => row.status === status);
+      const recurrenceKeys = url.searchParams.get("recurrence_key");
+      if (recurrenceKeys?.startsWith("in.")) {
+        const keys = recurrenceKeys.slice(3).replace(/[()]/g, "").split(",");
+        data = data.filter(row => keys.includes(row.recurrence_key ?? "once"));
+      }
+      if (url.searchParams.get("stopped") === "eq.true") data = data.filter(row => row.stopped);
+      if (url.searchParams.get("stopped") === "eq.false") data = data.filter(row => !row.stopped);
+      const behaviors = url.searchParams.get("definition_snapshot->>behavior");
+      if (behaviors?.startsWith("in.")) {
+        const values = behaviors.slice(3).replace(/[()]/g, "").split(",");
+        data = data.filter(row => values.includes(row.definition_snapshot?.behavior));
+      }
+      const order = url.searchParams.get("order");
+      if (order?.startsWith("scheduled_date.asc")) data.sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date));
+      if (order?.startsWith("scheduled_date.desc")) data.sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date));
+      if (order?.startsWith("effective_from.asc")) data.sort((a, b) => a.effective_from.localeCompare(b.effective_from));
+      const limit = Number(url.searchParams.get("limit"));
+      if (Number.isInteger(limit) && limit > 0) data = data.slice(0, limit);
       data = data.map(row => Object.fromEntries((url.searchParams.get("select") ?? "*").split(",").map(key => [key, row[key] ?? null])));
       return req.headers.accept?.includes("vnd.pgrst.object") ? send(res, data.length ? 200 : 406, data[0] ?? { code: "PGRST116", message: "No rows" }) : send(res, 200, data);
+    }
+    if (url.pathname === "/rest/v1/rpc/list_recurrence_candidates_page" && req.method === "POST") {
+      candidateReads++;
+      return send(res, 200, []);
     }
     if (url.pathname === "/rest/v1/rpc/edit_task_tree" && req.method === "POST") {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);

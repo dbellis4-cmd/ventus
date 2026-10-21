@@ -11,6 +11,17 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("button", { name: "Research Paper" })).toBeVisible();
 });
 
+test("Dashboard places the active subtask beneath its parent with an indent", async ({ page }) => {
+  const rows = page.locator(".anytime-section .task-row");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator(".task-title")).toHaveText("Research Paper");
+  await expect(rows.nth(1).locator(".task-title")).toHaveText("Active research");
+  await expect(rows.nth(1)).toHaveAttribute("data-subtask", "");
+  const padding = await rows.evaluateAll((items) => items.map((item) => parseFloat(getComputedStyle(item).paddingLeft)));
+  expect(padding[1]).toBeGreaterThan(padding[0]);
+  await expect(rows.nth(1).locator(".completion-checkbox")).toBeEnabled();
+});
+
 test("subtask section opens with an editable row and persists the edit", async ({ page }) => {
   await page.getByRole("button", { name: "Research Paper" }).click();
   const dialog = page.getByRole("dialog", { name: "Edit task" });
@@ -53,6 +64,19 @@ test("parent deletion warning counts active and canceled descendants without del
   await page.reload();
   await expect(page.getByRole("button", { name: "Research Paper" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Active research" })).toBeVisible();
+});
+
+test("one Load earlier click performs one bounded search even across years of empty history", async ({ page }) => {
+  await fetch("http://127.0.0.1:3174/__sparse-backlog");
+  await page.goto("/");
+  const button = page.getByRole("button", { name: "Load earlier unfinished tasks" });
+  await expect(button).toBeVisible();
+  const before = (await (await fetch("http://127.0.0.1:3174/__state")).json()).candidateReads;
+  await button.click();
+  await expect(button).toBeEnabled();
+  const after = (await (await fetch("http://127.0.0.1:3174/__state")).json()).candidateReads;
+  expect(after - before).toBeGreaterThan(0);
+  expect(after - before).toBeLessThanOrEqual(8);
 });
 
 function assertCategory(tasks, suffix, categorySuffix) {

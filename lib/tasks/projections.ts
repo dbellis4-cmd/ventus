@@ -1,10 +1,11 @@
 import { addDays, dateInZone, startOfWeek, validDate } from "./dates";
 
 export type CategoryRow = { id: string; name: string; seed_key: string | null; behavior: "fixed" | "flexible" | "deadline"; calendar_default: boolean; archived_at: string | null };
-export type TaskRow = { id: string; parent_task_id: string | null; title: string; deleted_at: string | null };
+export type TaskRow = { id: string; parent_task_id: string | null; title: string; deleted_at: string | null; version?: number; recurrence_enabled?: boolean };
 export type OccurrenceRow = {
-  id: string; task_id: string; scheduled_date: string; timezone: string;
+  id: string; task_id: string; recurrence_key?: string; version?: number; scheduled_date: string; timezone: string;
   start_time: string | null; starts_at: string | null;
+  end_date?: string | null; end_time?: string | null; ends_at?: string | null;
   original_date: string; original_start_time: string | null; original_timezone: string;
   status: "open" | "completed" | "canceled"; completed_at: string | null;
   deleted_at: string | null;
@@ -12,14 +13,17 @@ export type OccurrenceRow = {
 };
 
 export type ReadTask = {
-  id: string; occurrenceId: string; title: string; categoryName: string; categoryStyle: string;
-  date: string; scheduledDate: string; time: string; timezone: string;
+  id: string; occurrenceId: string; recurrenceKey: string; recurring: boolean; seriesVersion: number; occurrenceVersion: number; title: string; categoryName: string; categoryStyle: string;
+  date: string; scheduledDate: string; time: string; endDate: string; endTime: string; startsAt: string; endsAt: string; timezone: string;
   originalDate: string; originalTime: string; originalTimezone: string;
-  status: OccurrenceRow["status"]; parentId: string | null; parentTitle: string | null;
+  status: OccurrenceRow["status"]; behavior: OccurrenceRow["definition_snapshot"]["behavior"];
+  parentId: string | null; parentTitle: string | null;
   overdue: boolean;
 };
 
-export type ReadyWorkspace = { kind: "ready"; timezone: string; today: string; selected: string; tasks: ReadTask[] };
+export type BacklogCursor = { before: string; offset: number };
+export type ReadyWorkspace = { kind: "ready"; timezone: string; today: string; selected: string; tasks: ReadTask[];
+  backlog: ReadTask[]; backlogCursor: BacklogCursor | null };
 export type Workspace = ReadyWorkspace | { kind: "setup" } | { kind: "error" };
 
 export function projectWorkspace(timezone: string, selectedDate: unknown, categories: CategoryRow[], definitions: TaskRow[], occurrences: OccurrenceRow[], now = new Date()): ReadyWorkspace {
@@ -30,7 +34,7 @@ export function projectWorkspace(timezone: string, selectedDate: unknown, catego
   const weekEnd = addDays(week, 6);
   const tasks = new Map(definitions.filter((task) => !task.deleted_at).map((task) => [task.id, task]));
   const active = occurrences.filter((occurrence) => !occurrence.deleted_at && tasks.has(occurrence.task_id));
-  const snapshots = new Map(active.map((occurrence) => [occurrence.task_id, occurrence.definition_snapshot]));
+  const snapshots = new Map(active.map((occurrence) => [`${occurrence.task_id}:${occurrence.recurrence_key ?? "once"}`, occurrence.definition_snapshot]));
   const styles = new Map(categories.map((category) => [category.id, category.seed_key]));
   const projected: ReadTask[] = [];
   for (const occurrence of active) {
@@ -57,15 +61,20 @@ export function projectWorkspace(timezone: string, selectedDate: unknown, catego
     }
     if ((date < week || date > weekEnd) && !(today >= week && today <= weekEnd && overdue)) continue;
     projected.push({
-      id: task.id, occurrenceId: occurrence.id, title: snapshot.title,
+      id: task.id, occurrenceId: occurrence.id, recurrenceKey: occurrence.recurrence_key ?? "once",
+      recurring: !!task.recurrence_enabled,
+      seriesVersion: (task.parent_task_id ? tasks.get(task.parent_task_id)?.version : task.version) ?? 0,
+      occurrenceVersion: occurrence.version ?? 0, title: snapshot.title,
       categoryName: snapshot.category_name, categoryStyle: styles.get(snapshot.category_id) ?? "custom",
-      date, scheduledDate: occurrence.scheduled_date, time: occurrence.start_time ?? "", timezone: occurrence.timezone,
+      date, scheduledDate: occurrence.scheduled_date, time: occurrence.start_time ?? "",
+      endDate: occurrence.end_date ?? "", endTime: occurrence.end_time ?? "",
+      startsAt: occurrence.starts_at ?? "", endsAt: occurrence.ends_at ?? "", timezone: occurrence.timezone,
       originalDate: occurrence.original_date, originalTime: occurrence.original_start_time ?? "", originalTimezone: occurrence.original_timezone,
-      status: occurrence.status, parentId: task.parent_task_id,
-      parentTitle: task.parent_task_id ? snapshots.get(task.parent_task_id)?.title ?? tasks.get(task.parent_task_id)?.title ?? null : null,
+      status: occurrence.status, behavior: snapshot.behavior, parentId: task.parent_task_id,
+      parentTitle: task.parent_task_id ? snapshots.get(`${task.parent_task_id}:${occurrence.recurrence_key ?? "once"}`)?.title ?? tasks.get(task.parent_task_id)?.title ?? null : null,
       overdue,
     });
   }
   projected.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
-  return { kind: "ready", timezone, today, selected, tasks: projected };
+  return { kind: "ready", timezone, today, selected, tasks: projected, backlog: [], backlogCursor: null };
 }

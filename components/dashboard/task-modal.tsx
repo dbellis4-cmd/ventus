@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getTaskEditor, saveTask } from "@/app/task-actions";
 import { initialDraft, type SaveCommand, type TaskEditor, type TaskFailure } from "@/lib/tasks/editor";
 import { possibleInstants } from "@/lib/tasks/schedules";
+import { dateInZone } from "@/lib/tasks/dates";
 import { validateSaveCommand } from "@/lib/tasks/validation";
 import { Icon } from "./icon";
 
@@ -17,6 +18,7 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
   const [creationKey] = useState(() => crypto.randomUUID());
   const [error, setError] = useState<TaskFailure | null>(null);
   const [pending, setPending] = useState(false);
+  const [editScope, setEditScope] = useState<"occurrence" | "series">("occurrence");
   const inFlight = useRef(false);
   const lastCommand = useRef<SaveCommand | null>(null);
   const task = editor.nodes.find((node) => node.id === editor.taskId);
@@ -28,6 +30,9 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
   const categories = editor.categories.filter((category) => !category.archived_at || category.id === task?.categoryId);
   const enteredSubtasks = draft.subtasks.filter((sub) => sub.id || sub.title.trim());
   const visibleSubtasks = draft.subtasks.map((item, index) => ({ item, index })).filter(({ item }) => editor.nodes.find((node) => node.id === item.id)?.status !== "canceled");
+  const recurrence = draft.recurrence ?? { frequency: "none" as const, weekdays: [], endDate: "", foldSide: "earlier" as const };
+  const canChangeSeries = !!editor.recurrenceKey && !!editor.seriesRule && editor.recurrenceKey !== "once" &&
+    editor.recurrenceKey >= dateInZone(new Date(), draft.timezone);
 
   useEffect(() => {
     const element = dialog.current;
@@ -49,6 +54,7 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
       command = error?.code === "uncertain" && lastCommand.current ? lastCommand.current : validateSaveCommand(task ? {
         kind: "edit", taskId: task.id, rootId: editor.rootId, rootVersion: editor.rootVersion,
         taskVersion: task.taskVersion, occurrenceVersion: task.occurrenceVersion, draft: { ...draft, subtasks: enteredSubtasks },
+        ...(editor.recurrenceKey ? { recurrenceKey: editor.recurrenceKey, scope: editScope } : {}),
       } : { kind: "create", creationKey, draft: { ...draft, subtasks: enteredSubtasks } });
     } catch (reason) {
       setError({ ok: false, code: "invalid", message: reason instanceof Error ? reason.message : "Check the task fields." }); return;
@@ -70,7 +76,7 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
     if (!task || inFlight.current) return;
     inFlight.current = true; setPending(true);
     try {
-      const result = await getTaskEditor(task.id);
+      const result = await getTaskEditor(task.id, editor.recurrenceKey);
       if (result.ok) {
         setEditor(result.editor); setDraft(initialDraft(result.editor, date)); setError(null); lastCommand.current = null;
       } else setError({ ...result, code: "conflict" });
@@ -105,6 +111,13 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
       </header>
       <div className="modal-body">
         {closed && <p className="form-notice">{task?.status === "completed" ? "Reopen this task from its checkbox before editing." : "Canceled tasks cannot be edited."}</p>}
+        {editor.recurrenceKey && editor.recurrenceKey !== "once" && <fieldset className="field">
+          <legend>Edit</legend>
+          <label><input type="radio" name="edit-scope" checked={editScope === "occurrence"} disabled={locked}
+            onChange={() => setEditScope("occurrence")} /> This occurrence</label>
+          <label><input type="radio" name="edit-scope" checked={editScope === "series"} disabled={locked || !canChangeSeries}
+            onChange={() => setEditScope("series")} /> Entire series from this date</label>
+        </fieldset>}
         <label className="field">Title <span aria-hidden="true">*</span><input ref={titleInput} required maxLength={240} disabled={locked} placeholder="What needs to get done?" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
         <div className="field-pair">
           {isSubtask ? <label className="field">Category<input readOnly value={inheritedCategory?.name ?? ""} /></label> : <label className="field">Category <span aria-hidden="true">*</span><select required disabled={locked} value={draft.categoryId} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })}><option value="" disabled>Select a category</option>{categories.map((item) => <option key={item.id} value={item.id} disabled={!!item.archived_at}>{item.name}{item.archived_at ? " (archived)" : ""}</option>)}</select></label>}
@@ -121,12 +134,33 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
             <p className="field-help">Leave times empty for an anytime task. Time zone: {draft.timezone}.</p>
             {task?.endDate && task.endDate !== task.date && <p className="field-help">Stored end date: {task.endDate}. Overnight schedule changes are not available.</p>}
           </div></details>
-          {!isSubtask && <details><summary>Recurrence <span>Unavailable<Icon name="down" size={15} /></span></summary><div className="optional-content">
-            <label className="field">Repeat<select disabled value="" onChange={() => {}}><option value="">Does not repeat</option></select></label>
-            <p className="field-help">Recurring tasks will be available in a later milestone.</p>
+          {!isSubtask && (!editor.recurrenceKey || editScope === "series") && <details open={recurrence.frequency !== "none"}><summary>Recurrence <span>{recurrence.frequency === "none" ? "Optional" : "Repeats"}<Icon name="down" size={15} /></span></summary><div className="optional-content">
+            <label className="field">Repeat<select disabled={locked} value={recurrence.frequency} onChange={(event) => setDraft({ ...draft,
+              recurrence: { ...recurrence, frequency: event.target.value as typeof recurrence.frequency, weekdays: [] } })}>
+              <option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="weekdays">Selected weekdays</option>
+            </select></label>
+            {recurrence.frequency === "weekdays" && <fieldset className="field"><legend>Repeat on</legend>
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((name, day) => <label key={name}>
+                <input type="checkbox" disabled={locked} checked={recurrence.weekdays.includes(day)}
+                  onChange={(event) => setDraft({ ...draft, recurrence: { ...recurrence, weekdays: event.target.checked
+                    ? [...recurrence.weekdays, day].sort() : recurrence.weekdays.filter((value) => value !== day) } })} /> {name}
+              </label>)}
+            </fieldset>}
+            {recurrence.frequency !== "none" && <><label className="field">End date (optional)<input type="date" disabled={locked}
+              value={recurrence.endDate} min={draft.date} onChange={(event) => setDraft({ ...draft,
+                recurrence: { ...recurrence, endDate: event.target.value } })} /></label>
+              {draft.time && <label className="field">Repeated clock time<input disabled={locked} readOnly value={draft.time} /></label>}
+              {draft.time && <label className="field">Repeated time when clocks turn back<select disabled={locked}
+                value={recurrence.foldSide} onChange={(event) => setDraft({ ...draft,
+                  recurrence: { ...recurrence, foldSide: event.target.value as "earlier" | "later" } })}>
+                <option value="earlier">Earlier instant</option><option value="later">Later instant</option>
+              </select></label>}
+              <p className="field-help">Missing local times and invalid month dates are skipped. Each occurrence can be completed separately.</p>
+            </>}
           </div></details>}
           <details open={!!task?.location}><summary>Location <span>{draft.location ? "Location set" : "Optional"}<Icon name="down" size={15} /></span></summary><div className="optional-content"><label className="field">Location<input maxLength={1000} disabled={locked} placeholder="Add a place or meeting link" value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label></div></details>
-          {!isSubtask && <details open={visibleSubtasks.length > 0} onToggle={(event) => { if (event.currentTarget.open && !visibleSubtasks.length) addSubtask(); }}><summary>Subtasks <span>{visibleSubtasks.filter(({ item }) => item.id || item.title.trim()).length || "Optional"}<Icon name="down" size={15} /></span></summary><div className="optional-content">
+          {!isSubtask && !editor.recurrenceKey && <details open={visibleSubtasks.length > 0} onToggle={(event) => { if (event.currentTarget.open && !visibleSubtasks.length) addSubtask(); }}><summary>Subtasks <span>{visibleSubtasks.filter(({ item }) => item.id || item.title.trim()).length || "Optional"}<Icon name="down" size={15} /></span></summary><div className="optional-content">
             <p className="field-help">Each active subtask appears on its own date. Canceled subtasks stay canceled when you save the parent. Use its task row to complete or delete a saved subtask.</p>
             {visibleSubtasks.map(({ item, index }, visibleIndex) => {
               const saved = editor.nodes.find((node) => node.id === item.id);
