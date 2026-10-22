@@ -24,7 +24,7 @@ export function calendarClient(auth: OAuth2Client) { return calendar({ version: 
 
 export function serviceClient() {
   const { url } = requireSupabaseConfig();
-  return createSupabaseClient(url, required("SUPABASE_SERVICE_ROLE_KEY"), {
+  return createSupabaseClient(url, required("SUPABASE_SECRET_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }

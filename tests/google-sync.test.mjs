@@ -54,14 +54,18 @@ test("event mapping preserves all-day dates, explicit instants, zones, and rejec
 });
 
 test("refresh tokens are authenticated ciphertext and the app-created scope is exact", () => {
+  const secretKey = "sb_secret_fake_calendar_test_key";
+  let privilegedClientKey;
   const server = load("lib/google/server.ts", {
     "@googleapis/calendar": { calendar: () => ({}) },
     "google-auth-library": { OAuth2Client: class {} },
-    "@supabase/supabase-js": { createClient: () => ({}) },
+    "@supabase/supabase-js": { createClient: (_url, key) => { privilegedClientKey = key; return {}; } },
     "@/lib/auth/site-url": { getSiteUrl: () => "https://ventus.example.test" },
     "@/lib/supabase/config": { requireSupabaseConfig: () => ({ url: "http://127.0.0.1" }) },
-  }, { GOOGLE_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") });
+  }, { GOOGLE_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"), SUPABASE_SECRET_KEY: secretKey });
   assert.equal(server.GOOGLE_SCOPE, "https://www.googleapis.com/auth/calendar.app.created");
+  server.serviceClient();
+  assert.equal(privilegedClientKey, secretKey);
   const encrypted = server.encryptToken("fake-secret-refresh-token");
   assert.ok(!encrypted.includes("fake-secret-refresh-token"));
   assert.equal(server.decryptToken(encrypted), "fake-secret-refresh-token");
