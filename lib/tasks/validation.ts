@@ -27,14 +27,15 @@ export function validateSaveCommand(value: unknown): SaveCommand {
   ]);
   if (kind !== "create" && kind !== "edit") throw new TaskInputError("Unsupported task operation.");
   const raw = exact({ ...(command.draft as object), recurrence: (command.draft as { recurrence?: unknown } | null)?.recurrence ?? null },
-    ["title", "categoryId", "date", "time", "endTime", "timezone", "startInstant", "endInstant", "location", "subtasks", "recurrence"]);
+    ["title", "categoryId", "date", "time", "endTime", "timezone", "startInstant", "endInstant", "location", "calendarOptIn", "subtasks", "recurrence"]);
+  if (typeof raw.calendarOptIn !== "boolean") throw new TaskInputError("Choose whether this task appears in Google Calendar.");
   if (!validId(raw.categoryId) || !validTimezone(raw.timezone) || !Array.isArray(raw.subtasks)) throw new TaskInputError("Choose a category, timezone and valid subtasks.");
   const time = text(raw.time, 15); const endTime = text(raw.endTime, 15);
   if ((time && !validTime(time)) || (endTime && (!time || !validTime(endTime)))) throw new TaskInputError("Enter valid start and end times.");
   const seen = new Set<string>();
   const draft: TaskDraft = {
     title: text(raw.title, 240, true), categoryId: raw.categoryId, date: date(raw.date), time, endTime,
-    timezone: raw.timezone, startInstant: text(raw.startInstant, 40), endInstant: text(raw.endInstant, 40), location: text(raw.location, 1000),
+    timezone: raw.timezone, startInstant: text(raw.startInstant, 40), endInstant: text(raw.endInstant, 40), location: text(raw.location, 1000), calendarOptIn: raw.calendarOptIn,
     subtasks: raw.subtasks.map((value) => {
       const sub = exact(value, ["id", "title", "date", "startInstant", "endInstant"]);
       if ((sub.id !== null && !validId(sub.id)) || (typeof sub.id === "string" && seen.has(sub.id))) throw new TaskInputError("Invalid or repeated subtask reference.");

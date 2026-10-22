@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isValidActionOrigin } from "@/lib/auth/site-url";
 import { buildTaskWrite, readTaskEditor } from "@/lib/server/task-editor";
@@ -11,6 +12,13 @@ import { validId, validateLifecycleCommand, validateSaveCommand } from "@/lib/ta
 import { dateInZone, validDate } from "@/lib/tasks/dates";
 import { makeSchedule } from "@/lib/tasks/schedules";
 import type { BacklogCursor, ReadTask } from "@/lib/tasks/projections";
+import { syncOwner } from "@/lib/google/sync";
+
+function scheduleCalendarSync(userId: string) {
+  // shortcut: after() is bounded by the hosting function lifetime; the dirty queue and daily recovery retry unfinished writes.
+  try { after(async () => { try { await syncOwner(userId); } catch { /* Task writes remain saved for recovery. */ } }); }
+  catch { /* Calendar scheduling cannot turn a committed task write into a failure. */ }
+}
 
 async function authorize() {
   const requestHeaders = await headers();
@@ -62,6 +70,7 @@ export async function getMissedPage(cursor: unknown): Promise<
 
 export async function saveTask(input: unknown): Promise<SaveResult> {
   let attemptedWrite = false;
+  let syncOwnerId: string | null = null;
   let result: Extract<SaveResult, { ok: true }>;
   try {
     const command = validateSaveCommand(input);
@@ -80,6 +89,7 @@ export async function saveTask(input: unknown): Promise<SaveResult> {
         if (!validId(data?.task_id)) return failure(null, true);
         taskId = data.task_id;
       }
+      syncOwnerId = userId;
     }
     const target = editor.nodes.find((node) => node.id === editor.taskId);
     const behavior = !write.changed && target ? target.behavior : target?.behaviorOverride ?? editor.categories.find((category) => category.id === command.draft.categoryId)!.behavior;
@@ -88,15 +98,18 @@ export async function saveTask(input: unknown): Promise<SaveResult> {
   } catch (error) { return failure(error, attemptedWrite); }
   // A cache refresh failure cannot turn a committed write into a failed save.
   try { revalidatePath("/"); } catch { result.refreshFailed = true; }
+  if (syncOwnerId) scheduleCalendarSync(syncOwnerId);
   return result;
 }
 
 export async function changeTaskLifecycle(input: unknown): Promise<LifecycleResult> {
   let attemptedWrite = false;
+  let syncOwnerId: string | null = null;
   let result: Extract<LifecycleResult, { ok: true }>;
   try {
     const command = validateLifecycleCommand(input);
     const { client, userId } = await authorize();
+    syncOwnerId = userId;
     if (command.recurrenceKey) {
       const accountZone = command.kind === "postpone" ? null : (await readSettings(client, userId))?.timezone;
       let error: { code?: string } | null = null;
@@ -129,6 +142,7 @@ export async function changeTaskLifecycle(input: unknown): Promise<LifecycleResu
       if (error) throw error;
       result = { ok: true, date: command.kind === "postpone" ? command.date : dateInZone(new Date(), accountZone || "UTC") };
       try { revalidatePath("/"); } catch { result.refreshFailed = true; }
+      scheduleCalendarSync(userId);
       return result;
     }
     const editor = await readTaskEditor(client, userId, command.taskId);
@@ -168,5 +182,6 @@ export async function changeTaskLifecycle(input: unknown): Promise<LifecycleResu
     return failed.code === "uncertain" ? { ...failed, message: "The outcome is unknown. Refresh the Dashboard before trying again." } : failed;
   }
   try { revalidatePath("/"); } catch { result.refreshFailed = true; }
+  if (syncOwnerId) scheduleCalendarSync(syncOwnerId);
   return result;
 }

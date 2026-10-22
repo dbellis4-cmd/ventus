@@ -24,6 +24,7 @@ npm run typecheck
 npm run build
 npm run test:auth
 npm run test:tasks
+npm run test:calendar
 npm run test:browser
 ```
 
@@ -37,7 +38,15 @@ Ventus uses email/password authentication and standard Supabase SSR cookie
 sessions. `/login`, `/signup`, `/forgot-password`, and `/reset-password` provide
 login, registration, and recovery. `/` is the protected Dashboard; task data is
 stored through authenticated, owner-restricted Supabase RPCs and ownership RLS.
-Google Calendar synchronization is not connected.
+Google Calendar synchronization is implemented and verified locally; hosted migrations and production credentials are still pending.
+
+## Google Calendar integration (local implementation)
+
+The integration requests [`calendar.app.created`](https://developers.google.com/workspace/calendar/api/auth) plus the basic `openid` identity scope, creates a separate Ventus calendar, and synchronizes selected top-level tasks in both directions when Ventus opens or the user selects **Sync now**. Google’s verified `sub` claim is unique across active Ventus connections; email addresses are not used for identity. Task saves also schedule an outbound sync after the response; the daily recovery route retries pending outbound work. Google edits are imported on app open or **Sync now**. The existing Calendar sidebar link opens Google Calendar in a new tab. Deleting one recurring event in Google disables synchronization for that occurrence alone. Disconnecting keeps existing Google events.
+
+Before deployment, an approved operator must apply `supabase/migrations/20261023000100_google_calendar.sql` and then `supabase/migrations/20261024000100_google_account_uniqueness.sql` to hosted Supabase, enable the Google Calendar API, configure an OAuth consent screen and a **Web application** OAuth client, and register the exact `${SITE_URL}/api/google/callback` redirect URI. The uniqueness migration clears older Calendar-only tokens and asks those users to reconnect so their Google `sub` can be verified. Set the server-only `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TOKEN_ENCRYPTION_KEY` (base64 encoding of 32 random bytes), `SUPABASE_SERVICE_ROLE_KEY`, and deployment `CRON_SECRET` from `.env.example`. Never place them in `NEXT_PUBLIC_*` settings or Git. [Google's OAuth guidance](https://developers.google.com/identity/protocols/oauth2/) says refresh tokens for External apps in Testing mode expire after seven days; choose a suitable publishing mode before expecting long-lived connections.
+
+Local verification uses `npm run test:calendar` for fake Google responses, `python3 -B supabase/tests/verify_calendar_local.py "$PWD"` for disposable **local** Supabase data, and `npm run test:browser` for the UI fixture. The database script requires a running local Supabase stack and refuses a linked hosted project. These checks do not establish a live Google OAuth connection.
 
 ### Milestone 2 verification — October 19, 2026
 

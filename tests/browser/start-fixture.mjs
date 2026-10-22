@@ -123,6 +123,7 @@ const api = http.createServer(async (req, res) => {
         if (edit.patch.title) task.title = edit.patch.title;
         if (edit.patch.category_id) task.category_id = edit.patch.category_id;
         if (Object.hasOwn(edit.patch, "location")) task.location = edit.patch.location;
+        if (Object.hasOwn(edit.patch, "calendar_opt_in")) task.calendar_opt_in = edit.patch.calendar_opt_in;
         if (edit.patch.schedule) occurrence.scheduled_date = edit.patch.schedule.date;
         occurrence.definition_snapshot = { ...occurrence.definition_snapshot, title: task.title, category_id: task.category_id,
           category_name: categories.find(category => category.id === task.category_id)?.name ?? "Unknown" };

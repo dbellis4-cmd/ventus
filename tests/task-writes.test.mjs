@@ -254,7 +254,7 @@ test("complete hierarchy reads include off-week parents, siblings and grandchild
 });
 
 function actions({ identity = "verified-user", origin = "https://ventus.example.test", host = "ventus.example.test", originCheck = deployedOrigin, editor = context(), rpcError, rpcImpl, throwRpc = false, refreshError = false } = {}) {
-  const calls = []; let initializedClient = 0;
+  const calls = []; const background = []; const synced = []; let initializedClient = 0;
   const client = {
     auth: { getUser: async () => ({ data: { user: identity ? { id: identity } : null }, error: null }) },
     rpc: async (name, args) => { calls.push({ name, args: clean(args) }); if (throwRpc) throw new Error("PRIVATE NETWORK DETAIL"); if (rpcImpl) return rpcImpl(name, args); return { data: { task_id: id(55) }, error: rpcError ?? null }; },
@@ -262,6 +262,8 @@ function actions({ identity = "verified-user", origin = "https://ventus.example.
   const taskActions = load("app/task-actions.ts", {
     "next/headers": { headers: async () => new Headers(origin ? { origin, host } : { host }) },
     "next/cache": { revalidatePath: () => { if (refreshError) throw new Error("Refresh failed"); } },
+    "next/server": { after: callback => background.push(callback) },
+    "@/lib/google/sync": { syncOwner: async ownerId => { synced.push(ownerId); } },
     "@/lib/supabase/server": { createClient: async () => { initializedClient++; return client; } },
     "@/lib/auth/site-url": originCheck,
     "@/lib/server/task-editor": {
@@ -271,7 +273,7 @@ function actions({ identity = "verified-user", origin = "https://ventus.example.
     "@/lib/server/workspace": { readSettings: async () => ({ timezone: "America/Phoenix" }) },
     "@/lib/tasks/editor": editorTypes, "@/lib/tasks/validation": validation, "@/lib/tasks/dates": dates, "@/lib/tasks/schedules": schedules,
   });
-  return { ...taskActions, calls, get initializedClient() { return initializedClient; } };
+  return { ...taskActions, calls, background, synced, get initializedClient() { return initializedClient; } };
 }
 
 test("Server Actions deny anonymous/cross-origin/malformed/foreign requests and never expose provider errors", async () => {
@@ -314,12 +316,26 @@ test("completion and reopening use observed versions, affect only the selected n
   assert.equal(editor.nodes[0].status, "open");
   assert.equal((await action.changeTaskLifecycle(complete)).code, "conflict");
   assert.equal(action.calls.length, 1);
+  assert.equal(action.background.length, 1);
   const reopen = lifecycleCommand("completion", editor, { completed: false });
   assert.equal((await action.changeTaskLifecycle(reopen)).ok, true);
   assert.equal(action.calls[1].args.p_completed, false);
   assert.ok(!Object.hasOwn(action.calls[1].args, "p_actual_completed_at"));
+  assert.equal(action.background.length, 2);
+  await Promise.all(action.background.map(run => run()));
+  assert.deepEqual(action.synced, ["verified-user", "verified-user"]);
   const stale = actions({ rpcError: { code: "40001", message: "PRIVATE" } });
   assert.equal((await stale.changeTaskLifecycle(lifecycleCommand("completion", context(), { completed: true }))).code, "conflict");
+});
+
+test("recurring occurrence writes schedule one outbound Calendar pass", async () => {
+  const action = actions();
+  const command = lifecycleCommand("completion", context(), { completed: true, recurrenceKey: "2026-10-20" });
+  assert.equal((await action.changeTaskLifecycle(command)).ok, true);
+  assert.equal(action.calls[0].name, "mutate_recurring_occurrence");
+  assert.equal(action.background.length, 1);
+  await action.background[0]();
+  assert.deepEqual(action.synced, ["verified-user"]);
 });
 
 test("sibling changes do not block target lifecycle writes; stale targets and subtree deletes still conflict", async () => {
@@ -433,9 +449,13 @@ test("committed writes stay successful if refresh fails and no-op edits never in
   const result = await saved.saveTask(createCommand());
   assert.equal(result.ok, true); assert.equal(result.refreshFailed, true);
   assert.equal(saved.calls.length, 1);
+  assert.equal(saved.background.length, 1);
+  await saved.background[0]();
+  assert.deepEqual(saved.synced, ["verified-user"]);
   const noOp = actions();
   assert.equal((await noOp.saveTask(editCommand())).ok, true);
   assert.equal(noOp.calls.length, 0);
+  assert.equal(noOp.background.length, 0);
 });
 
 test("saving an old flexible task navigates to its Today projection without moving the stored slot", async () => {

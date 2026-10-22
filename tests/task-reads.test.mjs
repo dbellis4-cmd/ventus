@@ -522,6 +522,8 @@ function render(workspace) {
     "./icon": { Icon: () => null },
     "./timezone-setup": { TimezoneSetup: () => React.createElement("p", null, "Confirm timezone") },
     "./task-modal": { TaskModal: () => null },
+    "./calendar-settings": { CalendarSettings: () => null },
+    "@/app/google-actions": { syncGoogleNow: async () => ({ synced: false }) },
     "./lifecycle-dialog": { LifecycleDialog: () => null },
     "@/app/task-actions": { getTaskEditor: async () => { throw new Error("No editor read during render"); }, changeTaskLifecycle: async () => { throw new Error("No write during render"); } },
     "@/components/auth/logout-button": { LogoutButton: () => null },

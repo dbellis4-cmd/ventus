@@ -12,11 +12,12 @@ export type TaskEditor = {
   timezone: string; categories: CategoryRow[]; nodes: EditorNode[];
   recurrenceKey?: string;
   seriesRule?: NonNullable<TaskDraft["recurrence"]>;
+  seriesCalendarOptIn?: boolean;
 };
 export type SubtaskDraft = { id: string | null; title: string; date: string; startInstant: string; endInstant: string };
 export type TaskDraft = {
   title: string; categoryId: string; date: string; time: string; endTime: string;
-  timezone: string; startInstant: string; endInstant: string; location: string; subtasks: SubtaskDraft[];
+  timezone: string; startInstant: string; endInstant: string; location: string; calendarOptIn: boolean; subtasks: SubtaskDraft[];
   recurrence?: { frequency: "none" | "daily" | "weekly" | "monthly" | "yearly" | "weekdays"; weekdays: number[]; endDate: string; foldSide: "earlier" | "later" };
 };
 export type SaveCommand = { kind: "create"; creationKey: string; draft: TaskDraft } | {
@@ -44,6 +45,7 @@ export function initialDraft(editor: TaskEditor, date: string): TaskDraft {
     title: task?.title ?? "", categoryId: parent?.categoryId ?? task?.categoryId ?? "", date: task?.date ?? date,
     time: task?.time ?? "", endTime: task?.endTime ?? "", timezone: task?.timezone ?? editor.timezone,
     startInstant: task?.startsAt ?? "", endInstant: task?.endsAt ?? "", location: task?.location ?? "",
+    calendarOptIn: task?.calendarOptIn ?? editor.categories.find((item) => item.id === (parent?.categoryId ?? task?.categoryId))?.calendar_default ?? false,
     recurrence: editor.seriesRule ?? { frequency: "none", weekdays: [], endDate: "", foldSide: "earlier" },
     subtasks: editor.nodes.filter((node) => !!task && !task.parentId && node.parentId === task.id).map((node) => ({
       id: node.id, title: node.title, date: node.date, startInstant: node.startsAt, endInstant: node.endsAt,

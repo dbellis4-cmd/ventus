@@ -31,6 +31,10 @@ export async function readTaskEditor(client: SupabaseClient, userId: string, tas
   }
   const rootId = rootOf(taskId);
   const tree = definitions.filter((node) => rootOf(node.id) === rootId);
+  const override = await client.from("google_calendar_links").select("override_opt_in")
+    .eq("owner_id", userId).eq("task_id", taskId).eq("recurrence_key", recurrenceKey ?? "once").maybeSingle();
+  if (override.error) throw override.error;
+  const calendarOverride = override.data?.override_opt_in;
   if (recurrenceKey) {
     const response = await client.rpc("read_recurrence_context", { p_task_id: taskId, p_key: recurrenceKey });
     if (response.error || !response.data) throw response.error ?? unavailable();
@@ -56,7 +60,7 @@ export async function readTaskEditor(client: SupabaseClient, userId: string, tas
         id: definition.id, parentId: definition.parent_task_id,
         taskVersion: definition.version, occurrenceVersion: occurrence.version ?? 0,
         title: snapshot.title, categoryId: snapshot.category_id,
-        location: snapshot.location ?? "", calendarOptIn: snapshot.calendar_opt_in,
+        location: snapshot.location ?? "", calendarOptIn: occurrence.task_id === taskId && calendarOverride !== null && calendarOverride !== undefined ? calendarOverride : snapshot.calendar_opt_in,
         status: occurrence.status ?? "open", behavior: snapshot.behavior,
         behaviorOverride: definition.behavior_override, date: occurrence.scheduled_date,
         timezone: occurrence.timezone, time: occurrence.start_time ?? "",
@@ -65,7 +69,9 @@ export async function readTaskEditor(client: SupabaseClient, userId: string, tas
       };
     });
     return { taskId, rootId, rootVersion: context.root_version, timezone: settings.timezone,
-      categories, nodes, recurrenceKey, seriesRule: context.rule ? {
+      categories, nodes, recurrenceKey,
+      seriesCalendarOptIn: context.nodes.find((node) => node.task_id === taskId)?.definition_snapshot.calendar_opt_in,
+      seriesRule: context.rule ? {
         frequency: context.rule.frequency, weekdays: context.rule.weekdays,
         endDate: context.rule.end_date ?? "", foldSide: context.rule.fold_side,
       } : undefined };
@@ -77,7 +83,7 @@ export async function readTaskEditor(client: SupabaseClient, userId: string, tas
     if (!occurrence || !validVersion(node.version) || !validVersion(occurrence.version)) throw unavailable();
     return {
       id: node.id, parentId: node.parent_task_id, taskVersion: node.version, occurrenceVersion: occurrence.version,
-      title: node.title, categoryId: node.category_id, location: node.location ?? "", calendarOptIn: node.calendar_opt_in, status: occurrence.status,
+      title: node.title, categoryId: node.category_id, location: node.location ?? "", calendarOptIn: node.id === taskId && calendarOverride !== null && calendarOverride !== undefined ? calendarOverride : node.calendar_opt_in, status: occurrence.status,
       behavior: occurrence.definition_snapshot.behavior, behaviorOverride: node.behavior_override,
       date: occurrence.scheduled_date, timezone: occurrence.timezone, time: occurrence.start_time ?? "", startsAt: occurrence.starts_at ?? "",
       endDate: occurrence.end_date ?? "", endTime: occurrence.end_time ?? "", endsAt: occurrence.ends_at ?? "",
@@ -102,6 +108,7 @@ export function buildTaskWrite(command: SaveCommand, editor: TaskEditor) {
   }
   if (command.kind === "create") {
     const task = { title: draft.title, category_id: draft.categoryId, location: draft.location || null,
+      calendar_opt_in: draft.calendarOptIn,
       schedule: makeSchedule(draft.date, draft.time, draft.endTime, draft.timezone, draft.startInstant, draft.endInstant),
       subtasks: draft.subtasks.map(newSubtask) };
     if (draft.recurrence && draft.recurrence.frequency !== "none") {
@@ -149,16 +156,18 @@ export function buildTaskWrite(command: SaveCommand, editor: TaskEditor) {
         p_rule: { frequency: draft.recurrence.frequency, weekdays: draft.recurrence.weekdays,
           end_date: draft.recurrence.endDate || null, fold_side: draft.recurrence.foldSide },
         p_schedule: templateSchedule,
-        p_title: draft.title, p_category_id: draft.categoryId, p_location: draft.location || null,
+          p_title: draft.title, p_category_id: draft.categoryId, p_location: draft.location || null,
+          p_calendar_opt_in: draft.calendarOptIn,
       }, changed: true };
     }
-    const patch: { title?: string; category_id?: string; location?: string | null } = {};
+    const patch: { title?: string; category_id?: string; location?: string | null; calendar_opt_in?: boolean } = {};
     if (draft.title !== target.title) patch.title = draft.title;
     if (draft.categoryId !== target.categoryId) {
       if (children.length) throw new TaskInputError("Change the series category when it has recurring subtasks.");
       patch.category_id = draft.categoryId;
     }
     if (draft.location !== target.location) patch.location = draft.location || null;
+    if (draft.calendarOptIn !== target.calendarOptIn) patch.calendar_opt_in = draft.calendarOptIn;
     return { rpc: "mutate_recurring_occurrence" as const, args: {
       p_task_id: target.id, p_recurrence_key: command.recurrenceKey,
       p_expected_series_version: editor.rootVersion,
@@ -176,7 +185,7 @@ export function buildTaskWrite(command: SaveCommand, editor: TaskEditor) {
   // to a top-level task, regardless of the broader database hierarchy contract.
   const children = editor.nodes.filter((node) => !target.parentId && node.parentId === target.id);
   if (children.some((child) => !draft.subtasks.some((sub) => sub.id === child.id))) throw new TaskInputError("Delete saved subtasks from their task row.");
-  type Patch = { title?: string; category_id?: string; location?: string | null; schedule?: ReturnType<typeof makeSchedule> };
+  type Patch = { title?: string; category_id?: string; location?: string | null; calendar_opt_in?: boolean; schedule?: ReturnType<typeof makeSchedule> };
   const edits: { task_id: string; task_version: number; occurrence_version: number; patch: Patch }[] = [];
   function addEdit(node: EditorNode, patch: Patch) {
     if (!Object.keys(patch).length) return;
@@ -192,6 +201,7 @@ export function buildTaskWrite(command: SaveCommand, editor: TaskEditor) {
   if (draft.title !== target.title) patch.title = draft.title;
   if (draft.categoryId !== target.categoryId) patch.category_id = draft.categoryId;
   if (draft.location !== target.location) patch.location = draft.location || null;
+  if (draft.calendarOptIn !== target.calendarOptIn) patch.calendar_opt_in = draft.calendarOptIn;
   if (draft.date !== target.date || draft.time !== target.time || draft.endTime !== target.endTime || draft.startInstant !== target.startsAt || draft.endInstant !== target.endsAt) {
     patch.schedule = changedSchedule(target, draft.date, draft.time, draft.endTime, draft.startInstant, draft.endInstant);
   }

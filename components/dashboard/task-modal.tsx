@@ -78,7 +78,7 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
     try {
       const result = await getTaskEditor(task.id, editor.recurrenceKey);
       if (result.ok) {
-        setEditor(result.editor); setDraft(initialDraft(result.editor, date)); setError(null); lastCommand.current = null;
+        setEditor(result.editor); setDraft(initialDraft(result.editor, date)); setEditScope("occurrence"); setError(null); lastCommand.current = null;
       } else setError({ ...result, code: "conflict" });
     } catch { setError({ ok: false, code: "conflict", message: "Unable to reload. Your draft is still kept. Please try again." }); }
     finally { inFlight.current = false; setPending(false); }
@@ -114,13 +114,13 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
         {editor.recurrenceKey && editor.recurrenceKey !== "once" && <fieldset className="field">
           <legend>Edit</legend>
           <label><input type="radio" name="edit-scope" checked={editScope === "occurrence"} disabled={locked}
-            onChange={() => setEditScope("occurrence")} /> This occurrence</label>
+            onChange={() => { setEditScope("occurrence"); setDraft({ ...draft, calendarOptIn: task?.calendarOptIn ?? false }); }} /> This occurrence</label>
           <label><input type="radio" name="edit-scope" checked={editScope === "series"} disabled={locked || !canChangeSeries}
-            onChange={() => setEditScope("series")} /> Entire series from this date</label>
+            onChange={() => { setEditScope("series"); setDraft({ ...draft, calendarOptIn: editor.seriesCalendarOptIn ?? false }); }} /> Entire series from this date</label>
         </fieldset>}
         <label className="field">Title <span aria-hidden="true">*</span><input ref={titleInput} required maxLength={240} disabled={locked} placeholder="What needs to get done?" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
         <div className="field-pair">
-          {isSubtask ? <label className="field">Category<input readOnly value={inheritedCategory?.name ?? ""} /></label> : <label className="field">Category <span aria-hidden="true">*</span><select required disabled={locked} value={draft.categoryId} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value })}><option value="" disabled>Select a category</option>{categories.map((item) => <option key={item.id} value={item.id} disabled={!!item.archived_at}>{item.name}{item.archived_at ? " (archived)" : ""}</option>)}</select></label>}
+          {isSubtask ? <label className="field">Category<input readOnly value={inheritedCategory?.name ?? ""} /></label> : <label className="field">Category <span aria-hidden="true">*</span><select required disabled={locked} value={draft.categoryId} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value, ...(!task ? { calendarOptIn: categories.find((item) => item.id === event.target.value)?.calendar_default ?? false } : {}) })}><option value="" disabled>Select a category</option>{categories.map((item) => <option key={item.id} value={item.id} disabled={!!item.archived_at}>{item.name}{item.archived_at ? " (archived)" : ""}</option>)}</select></label>}
           <label className="field">Date <span aria-hidden="true">*</span><input type="date" required disabled={locked} value={draft.date} onInput={(event) => setDraft({ ...draft, date: event.currentTarget.value, startInstant: "", endInstant: "" })} /></label>
         </div>
         <div className="optional-sections">
@@ -178,7 +178,7 @@ export function TaskModal({ editor: initialEditor, date, onSaved, onClose, onDel
             <button type="button" className="text-button" disabled={locked || draft.subtasks.filter((sub) => !sub.id).length >= 99} onClick={addSubtask}><Icon name="plus" size={15} />Add subtask</button>
           </div></details>}
         </div>
-        {!isSubtask && <label className="calendar-option"><input type="checkbox" disabled checked={task?.calendarOptIn ?? editor.categories.find((category) => category.id === draft.categoryId)?.calendar_default ?? false} /><span>Add to Google Calendar</span><span className="small-tag">Unavailable</span></label>}
+        {!isSubtask && <label className="calendar-option"><input type="checkbox" disabled={locked} checked={draft.calendarOptIn} onChange={(event) => setDraft({ ...draft, calendarOptIn: event.target.checked })} /><span>Add to Google Calendar</span></label>}
         {error && <p role="alert" className="form-error">{error.message}</p>}
         {error?.code === "conflict" && <button type="button" className="text-button" disabled={pending} onClick={() => void reloadSavedTask()}>Reload saved task (discard draft)</button>}
       </div>

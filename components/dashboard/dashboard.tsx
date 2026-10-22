@@ -11,11 +11,13 @@ import { changeTaskLifecycle, getMissedPage, getTaskEditor } from "@/app/task-ac
 import type { TaskEditor } from "@/lib/tasks/editor";
 import { LifecycleDialog, type LifecycleMode } from "./lifecycle-dialog";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { CalendarSettings } from "./calendar-settings";
+import { syncGoogleNow } from "@/app/google-actions";
 
-export function Dashboard({ workspace }: { workspace: Workspace }) {
+export function Dashboard({ workspace, calendarNotice }: { workspace: Workspace; calendarNotice?: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [view, setView] = useState("Dashboard");
+  const [view, setView] = useState(calendarNotice ? "Settings" : "Dashboard");
   const [editor, setEditor] = useState<TaskEditor | null>(null);
   const [lifecycle, setLifecycle] = useState<{ mode: LifecycleMode; editor: TaskEditor } | null>(null);
   const [editorLoading, setEditorLoading] = useState(false);
@@ -29,6 +31,7 @@ export function Dashboard({ workspace }: { workspace: Workspace }) {
   const [backlogLoading, setBacklogLoading] = useState(false);
   const editorRequest = useRef(0);
   const ready = workspace.kind === "ready" ? workspace : null;
+  useEffect(() => { if (workspace.kind === "ready") void syncGoogleNow(); }, [workspace.kind]);
   const loadedBacklog = backlogState.source === workspace ? backlogState.items : ready?.backlog ?? [];
   const backlogCursor = backlogState.source === workspace ? backlogState.cursor : ready?.backlogCursor ?? null;
   const today = ready?.today ?? "2000-01-01";
@@ -206,7 +209,7 @@ export function Dashboard({ workspace }: { workspace: Workspace }) {
             <button className="add-inline" disabled={pending || editorLoading} onClick={() => void openEditor()}><Icon name="plus" size={16} />Add another task</button>
           </section>
         </section>
-      </> : <section className="placeholder-panel"><span className="small-tag">Not implemented yet</span><h2>{view === "Performance" ? "Performance arrives in Phase 2." : "Settings will be available in a later milestone."}</h2><p>{view === "Performance" ? "Points, rankings, and analytics are outside this preview." : "Account preferences and calendar connections are not connected in this preview."}</p><button className="button secondary" onClick={() => setView("Dashboard")}>Back to Dashboard</button></section>}
+      </> : view === "Settings" ? <CalendarSettings initialNotice={calendarNotice} /> : <section className="placeholder-panel"><span className="small-tag">Not implemented yet</span><h2>Performance arrives in Phase 2.</h2><p>Points, rankings, and analytics are outside this preview.</p><button className="button secondary" onClick={() => setView("Dashboard")}>Back to Dashboard</button></section>}
       {ready && <footer className="preview-note"><span className="local-indicator" />Workspace timezone: {ready.timezone}</footer>}
       <p className="sr-only" role="status" aria-live="polite">{pending ? "Loading selected day…" : ready ? `Showing ${formatDate(selected, { weekday: "long", month: "long", day: "numeric" })}.` : ""}</p>
     </main>
