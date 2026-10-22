@@ -1,3 +1,4 @@
 {
+  "framework": "nextjs",
   "crons": [{ "path": "/api/google/recovery", "schedule": "0 8 * * *" }]
 }
