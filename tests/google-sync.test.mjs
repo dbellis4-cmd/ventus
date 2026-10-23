@@ -25,6 +25,11 @@ const dates = load("lib/tasks/dates.ts");
 const editor = load("lib/tasks/editor.ts");
 const schedules = load("lib/tasks/schedules.ts", { "./dates": dates, "./editor": editor });
 const mapping = load("lib/google/mapping.ts", { "@/lib/tasks/dates": dates, "@/lib/tasks/schedules": schedules });
+const validation = load("lib/tasks/validation.ts", { "./dates": dates, "./editor": editor, "./schedules": schedules });
+const taskWrites = load("lib/server/task-editor.ts", {
+  "@/lib/server/workspace": {}, "@/lib/tasks/editor": editor, "@/lib/tasks/schedules": schedules,
+  "@/lib/tasks/dates": dates, "@/lib/tasks/validation": validation,
+});
 const owner = "11111111-1111-4111-8111-111111111111";
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const today = dates.dateInZone(new Date(), "America/Phoenix");
@@ -129,10 +134,16 @@ function fakeHarness({ recurring = true } = {}) {
     return { data: candidates.filter(row => row.scheduled_date >= args.p_from && row.scheduled_date <= args.p_to), error: null };
   } };
   const userClient = { async rpc(name, args) {
-    if (name === "fake_apply") {
-      state.tasks[0].title = args.title;
-      state.tasks[0].location = args.location;
-      state.task_occurrences[0].scheduled_date = args.date;
+    if (name === "edit_task_tree") {
+      calls.push([name, args]);
+      for (const edit of args.p_edits) {
+        const { schedule, ...patch } = edit.patch;
+        Object.assign(state.tasks.find(task => task.id === edit.task_id), patch);
+        if (schedule) {
+          const { date, ...times } = schedule;
+          Object.assign(state.task_occurrences.find(row => row.task_id === edit.task_id), { scheduled_date: date, ...times });
+        }
+      }
       return { error: null };
     }
     calls.push([name, args]); return { error: null };
@@ -177,8 +188,7 @@ function fakeHarness({ recurring = true } = {}) {
           timezone: occurrence.timezone, time: occurrence.start_time ?? "", startsAt: occurrence.starts_at ?? "",
           endDate: occurrence.end_date ?? "", endTime: occurrence.end_time ?? "", endsAt: occurrence.ends_at ?? "",
           categoryId: id(90) }] };
-    }, buildTaskWrite: command => ({ changed: true, rpc: "fake_apply",
-      args: { title: command.draft.title, location: command.draft.location || null, date: command.draft.date } }) },
+    }, buildTaskWrite: taskWrites.buildTaskWrite },
     "@/lib/server/workspace": { readSettings: async () => ({ timezone: "America/Phoenix" }),
       readOwnedRows: async (_db, table, _fields, user, activeOnly, filter) => state[table]
         .filter(row => row.owner_id === user && (!activeOnly || !row.deleted_at) &&
@@ -253,6 +263,51 @@ test("fake Google API: inbound edits update Ventus; unsupported edits pause one 
   assert.equal((await fake.sync()).synced, true);
   assert.equal(link.state, "error");
   assert.equal(fake.calls.filter(call => call[0] === "update").length, 0);
+});
+
+test("fake Google API: a start-only task imports a zero-duration Google move without an overwrite or loop", async () => {
+  const fake = fakeHarness({ recurring: false });
+  const occurrence = fake.state.task_occurrences[0];
+  Object.assign(occurrence, { start_time: "14:00:00", starts_at: `${tomorrow}T21:00:00Z` });
+  await fake.sync();
+  const link = fake.state.google_calendar_links[0];
+  const event = { ...fake.events.get(link.event_id),
+    start: { dateTime: `${tomorrow}T15:00:00-07:00`, timeZone: "America/Phoenix" },
+    end: { dateTime: `${tomorrow}T22:00:00Z`, timeZone: "America/Phoenix" } };
+  fake.events.set(link.event_id, event);
+  fake.listItems.push(event);
+  assert.equal((await fake.sync()).synced, true);
+  assert.equal(link.state, "active");
+  assert.equal(link.last_error, null);
+  assert.equal(occurrence.start_time, "15:00:00");
+  assert.equal(Date.parse(occurrence.starts_at), Date.parse(`${tomorrow}T22:00:00Z`));
+  assert.equal(occurrence.timezone, "America/Phoenix");
+  assert.equal(occurrence.end_time, null);
+  assert.equal(occurrence.ends_at, null);
+  fake.listItems.push(event);
+  await fake.sync();
+  await fake.sync();
+  assert.equal(fake.calls.filter(call => call[0] === "edit_task_tree").length, 1);
+  assert.equal(fake.calls.filter(call => call[0] === "insert").length, 1);
+  assert.equal(fake.calls.filter(call => call[0] === "update").length, 0);
+});
+
+test("zero-duration mapping preserves end-time validation and ordinary timed imports", () => {
+  const task = { taskId: id(1), recurrenceKey: "once", title: "Meeting", location: null,
+    date: tomorrow, timezone: "America/Phoenix", time: "14:00:00", startsAt: `${tomorrow}T21:00:00Z`,
+    endDate: null, endTime: null, endsAt: null };
+  const event = { summary: "Meeting", start: { dateTime: `${tomorrow}T15:00:00-07:00`, timeZone: task.timezone },
+    end: { dateTime: `${tomorrow}T15:00:00-07:00`, timeZone: task.timezone } };
+  assert.equal(mapping.fromGoogleEvent(event, task).schedule.end_time, null);
+  assert.throws(() => mapping.fromGoogleEvent(event, { ...task, time: null, startsAt: null }), /Unsupported/);
+  assert.throws(() => mapping.fromGoogleEvent(event, { ...task, endDate: tomorrow,
+    endTime: "15:00:00", endsAt: `${tomorrow}T22:00:00Z` }), /Unsupported/);
+  assert.throws(() => mapping.fromGoogleEvent({ ...event, end: { ...event.end,
+    dateTime: `${tomorrow}T14:59:00-07:00` } }, task), /Unsupported/);
+  const moved = mapping.fromGoogleEvent({ ...event, end: { ...event.end,
+    dateTime: `${tomorrow}T16:00:00-07:00` } }, task).schedule;
+  assert.equal(moved.start_time, "15:00:00");
+  assert.equal(moved.end_time, null);
 });
 
 test("fake Google API: unchecking deletes the event and rechecking creates a fresh identity", async () => {

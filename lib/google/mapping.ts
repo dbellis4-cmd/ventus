@@ -49,12 +49,14 @@ export function fromGoogleEvent(event: calendar_v3.Schema$Event, current: Calend
   }
   const start = event.start?.dateTime; const end = event.end?.dateTime;
   const zone = event.start?.timeZone || current.timezone;
+  const duration = Date.parse(end ?? "") - Date.parse(start ?? "");
+  // Google can retain the synthetic end when a task with no end is moved to that instant.
+  const synthetic = !!current.startsAt && !current.endsAt && (duration === 0 || duration === 60 * 60_000);
   if (!start || !end || !validTimezone(zone) || zone !== current.timezone || event.end?.timeZone && event.end.timeZone !== zone ||
-      !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(start)) {
+      !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || duration <= 0 && !synthetic) {
     throw new Error("Unsupported Google event time");
   }
   const first = local(start, zone); const last = local(end, zone);
-  const synthetic = !!current.startsAt && !current.endsAt && Date.parse(end) - Date.parse(start) === 60 * 60_000;
   return accepted(makeSchedule(first.date, first.time, synthetic ? "" : last.time, zone,
     start, synthetic ? "" : end, last.date));
 }

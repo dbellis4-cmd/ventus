@@ -1,8 +1,8 @@
 # Ventus — Project Status
 
 **Updated:** October 22, 2026, America/Phoenix.
-**Current work:** Milestone 5 Google Calendar integration is complete and verified locally. Both Milestone 5 migrations are applied and structurally verified on hosted Supabase. The server-side Supabase secret-key update is ready for production; the application remains undeployed.
-**Overall:** Product Phase 1 is in progress. No public application deployment or release readiness is claimed.
+**Current work:** Production commit `10a64b8` deployed successfully on Vercel after explicitly selecting Next.js in `vercel.json`. Both Milestone 5 migrations are hosted. The zero-duration inbound Calendar correction has passed local release checks and is finalized for the approved production release; confirm the resulting commit in Vercel deployment history.
+**Overall:** Product Phase 1 is in progress. Production deployment succeeded; broader release verification remains incomplete.
 
 ## Implementation and verification
 
@@ -205,3 +205,9 @@ Unresolved default Turbopack environment failure, password recovery, direct host
 - Calendar's server-only Supabase client now reads `SUPABASE_SECRET_KEY`; the environment example and deployment README use the same name. A fake-Google regression asserts the privileged client receives that key. No database grants, RLS policies, or OAuth flow changed.
 - Vercel lists `SUPABASE_SECRET_KEY` as a Production Secret. Its project Git settings explicitly report no connected repository, so a GitHub push cannot trigger this Vercel project to deploy. The existing legacy Vercel secret remains configured pending a separately approved retirement. Hosted application deployment and runtime verification are still pending.
 - Final local checks passed: disposable Supabase Calendar security regression, 16 fake-Google, 17 Auth, 59 task, seven isolated Playwright tests, lint, typecheck and Webpack production build. Playwright and the database regression required local port/Docker access beyond the default sandbox; neither touched hosted Supabase.
+
+### First production Calendar inbound investigation — October 22, 2026
+
+- Read-only UI inspection found the test task at 14:00 in `America/Phoenix` with no end time, while its linked Google event was 15:00–15:00 in Phoenix. The importer rejected equal start/end instants before conflict resolution, paused the link, and surfaced the review count. Google time edits are intended to import when the Ventus fields still match the last synchronized snapshot.
+- The local mapper now accepts a zero-duration Google edit only when the linked timed task already has no end. It imports the new start and preserves the absent end. Negative durations, zero-duration edits of explicit-end tasks, unsupported timezones/spans and recurrence conversions remain rejected. No production task, event, database row, credential or migration was modified.
+- The new fake-Google regression failed before the correction and passed afterward through the real task-write builder. Eighteen Calendar, 59 task and 17 Auth tests, lint, typecheck and the production build passed. Repeated fake syncs cause one task write, no duplicate event and no outbound overwrite. Finalization also passed the disposable localhost Supabase Calendar security regression and all seven isolated Playwright tests; Calendar, lint, typecheck and production build passed again. No migration or credential change is part of this release. The existing paused production event remains untouched and needs a later Google change or separately reviewed recovery because its original delta has already been consumed.
